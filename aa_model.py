@@ -630,6 +630,9 @@ def adaptor_fix_bb_indep(out):
         true_crds = true_crds[0]
         atom_mask = atom_mask[0]
     
+    #update template features
+    xyz_t, mask_t, t1d, xyz_prev, mask_prev = set_ground_truth_template_feats(seq, true_crds, atom_mask)
+
     # our dataloaders return torch.zeros(L...) for atom frames and chirals when there are none, this updates it to use common shape 
     ic(atom_frames)
     if torch.all(atom_frames == 0):
