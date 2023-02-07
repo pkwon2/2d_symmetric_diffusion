@@ -70,6 +70,7 @@ item = """
                              'nonpoly')],
                'RESOLUTION': 1.29,
                'SEQUENCE': 'GSMSEQSICQARAAVMVYDDANKKWVPAGGSTGFSRVHIYHHTGNNTFRVVGRKIQDHQVVINCAIPKGLKYNQATQTFHQWRDARQVYGLNFGSKEDANVFASAMMHALEVL'}"""
+# Slow-loading (~13s) pickle which has all the training data.
 # aa_pickle = "/projects/ml/RF2_allatom/dataset_diffusion_20230201_taxid.pkl"
 mol_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test_data/pkl')
 aa_pickle = "test_fake_allatom_dataset.pkl"
