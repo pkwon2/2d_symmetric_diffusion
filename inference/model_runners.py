@@ -285,6 +285,12 @@ class Sampler:
         # HACK: TODO: save this in the model config
         self.loss_param = {'lj_lin': 0.75}
         model = RoseTTAFoldModule(
+            symmetrize_repeats=None, 
+            repeat_length=None,
+            symmsub_k=None,
+            sym_method=None,
+            main_block=None,
+            copy_main_block_template=None,
             **self._conf.model,
             aamask=self.aamask,
             atom_type_index=self.atom_type_index,

@@ -830,7 +830,8 @@ class AtomizeResidues:
         total_L = self.update_rf_features_w_atomized_features(seq_atomize_all, \
                                                             xyz_atomize_all, \
                                                             frames_atomize_all, 
-                                                            chirals_atomize_all
+                                                            chirals_atomize_all,
+                                                            atom_mask
                                                             ) 
 
         pop = self.pop_protein_feats(res_idx_atomize_all, total_L)
@@ -1059,4 +1060,3 @@ class AtomizeResidues:
 
     def return_input_tensors(self):
         return self.indep, self.masks_1d
-
