@@ -39,6 +39,8 @@ import inference.model_runners
 import rf2aa.tensor_util
 import rf2aa.util
 import aa_model
+import util
+from icecream import ic 
 # ic.configureOutput(includeContext=True)
 
 def make_deterministic(seed=0):
@@ -189,8 +191,8 @@ def sample_one(sampler, simple_logging=False):
                 if t%10 == 0:
                     e = t
                 print(f'{e}', end='')
-            px0, x_t, seq_t, tors_t, plddt, rfo = sampler.sample_step(
-                t, indep, rfo)
+            px0, x_t, seq_t, tors_t, plddt, rfo = sampler.sample_step(t, indep, rfo)
+
             # assert_that(indep.xyz.shape).is_equal_to(x_t.shape)
             rf2aa.tensor_util.assert_same_shape(indep.xyz, x_t)
             indep.xyz = x_t
@@ -209,6 +211,33 @@ def sample_one(sampler, simple_logging=False):
             px0_xyz_stack.append(px0)
             denoised_xyz_stack.append(x_t)
             seq_stack.append(seq_t)
+
+        # if doing new symmetry, dump full complex:
+        if sampler._conf.inference.internal_sym:
+            symmRs = sampler.symmRs.cpu()   # get symmetry operations for whole complex
+            O = symmRs.shape[0]             # get total num of subunits 
+            # find number of subunits that were modeled
+            Nsub = sampler.symmsub.shape[0]
+            Lasu = px0.shape[0] // Nsub
+
+            # grab ASU and propogate full complex 
+            xyz_particle = torch.full( (O*Lasu,23,3), float('nan'), device=px0.device )
+            seq_particle = torch.zeros( (O*Lasu),dtype=seq_t.dtype, device=seq_t.device )
+
+            # put first asu in 
+            xyz_particle[:Lasu,:14]   = px0[:Lasu]
+
+            ic(seq_particle.shape)
+            ic(seq_t.shape)
+            seq_particle[:Lasu] = torch.argmax( seq_t[:Lasu] )
+
+            for i in range(1,O):
+                xyz_particle[(i*Lasu):((i+1)*Lasu),:14] = torch.einsum('ij,raj->rai', symmRs[i], px0[:Lasu])
+                seq_particle[(i*Lasu):((i+1)*Lasu)] = torch.argmax( seq_t[:Lasu] )
+        else:
+            xyz_particle = None 
+            seq_particle = None
+            Lasu = None 
         
         # Flip order for better visualization in pymol
         denoised_xyz_stack = torch.stack(denoised_xyz_stack)
@@ -216,9 +245,9 @@ def sample_one(sampler, simple_logging=False):
         px0_xyz_stack = torch.stack(px0_xyz_stack)
         px0_xyz_stack = torch.flip(px0_xyz_stack, [0,])
 
-        return indep, denoised_xyz_stack, px0_xyz_stack, seq_stack
+        return indep, denoised_xyz_stack, px0_xyz_stack, seq_stack, xyz_particle, seq_particle, Lasu
 
-def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, seq_stack):
+def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, seq_stack, xyz_particle, seq_particle, Lasu):
     log = logging.getLogger(__name__)
     # Save outputs 
     os.makedirs(os.path.dirname(out_prefix), exist_ok=True)
@@ -244,6 +273,14 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
     out = f'{out_prefix}.pdb'
     aa_model.write_traj(out, denoised_xyz_stack[0:1], final_seq, indep.bond_feats, chain_Ls=chain_Ls)
     des_path = os.path.abspath(out)
+
+    # symmetric oligomer PDB dump (New point symmetry protocol)
+    if xyz_particle is not None:
+        assert seq_particle is not None, 'Why is xyz_particle not None but seq_particle is None?'
+        chain_Ls_symm = [Lasu]*(xyz_particle.shape[0]//Lasu)
+        out = f'{out_prefix}_symm.pdb'
+        with open(out, 'w') as f:
+            rf2aa.util.writepdb_file(f, xyz_particle.cpu(), torch.zeros_like(seq_particle).long(), chain_Ls=chain_Ls_symm)
 
     # trajectory pdbs
     traj_prefix = os.path.dirname(out_prefix)+'/traj/'+os.path.basename(out_prefix)

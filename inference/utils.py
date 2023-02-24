@@ -125,6 +125,7 @@ def get_next_frames(xt, px0, t, diffuser, so3_type, diffusion_mask, noise_scale=
     # (L,3,3) set of backbone coordinates with slight rotation 
     return next_crds.squeeze(1)
 
+
 def get_mu_xt_x0(xt, px0, t, beta_schedule, alphabar_schedule, eps=1e-6):
     """
     Given xt, predicted x0 and the timestep t, give mu of x(t-1)
@@ -143,6 +144,7 @@ def get_mu_xt_x0(xt, px0, t, beta_schedule, alphabar_schedule, eps=1e-6):
     mu = a + b
 
     return mu, sigma
+
 
 def get_next_ca(xt, px0, t, diffusion_mask, crd_scale, beta_schedule, alphabar_schedule, noise_scale=1.):
     """

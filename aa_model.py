@@ -17,7 +17,7 @@ import copy
 import numpy as np
 from kinematics import get_init_xyz
 import chemical
-from rf2aa.chemical import MASKINDEX
+from rf2aa.chemical import MASKINDEX, seq2chars
 import util
 import inference.utils
 import networkx as nx
@@ -166,6 +166,7 @@ class Model:
         msa_prot = torch.tensor(seq_prot)[None].long()
         ins_prot = torch.zeros(msa_prot.shape).long()
         a3m_prot = {"msa": msa_prot, "ins": ins_prot}
+
         if parse_hetatm:
             with open(pdb, 'r') as fh:
                 stream = [l for l in fh if "HETATM" in l or "CONECT" in l]
@@ -177,6 +178,9 @@ class Model:
             mol, msa_sm, ins_sm, xyz_sm, _ = parsers.parse_mol("".join(stream), filetype="pdb", string=True)
             a3m_sm = {"msa": msa_sm.unsqueeze(0), "ins": ins_sm.unsqueeze(0)}
             G = rf2aa.util.get_nxgraph(mol)
+            
+            # index 0 - offset from current residue/atom. 0 is the current residue/atom
+            # index 1 - which atom in the residue (0 indexed)
             atom_frames = rf2aa.util.get_atom_frames(msa_sm, G)
             N_symmetry, sm_L, _ = xyz_sm.shape
             Ls = [protein_L, sm_L]
@@ -185,6 +189,7 @@ class Model:
             chirals = get_chirals(mol, xyz_sm[0])
             if chirals.numel() !=0:
                 chirals[:,:-1] += protein_L
+
         else:
             Ls = [msa_prot.shape[-1], 0]
             N_symmetry = 1
@@ -196,10 +201,11 @@ class Model:
         if parse_hetatm:
             xyz[:, Ls[0]:, 1, :] = xyz_sm
         xyz = xyz[0]
+
         mask[:, :protein_L, :nprotatoms] = mask_prot.expand(N_symmetry, Ls[0], nprotatoms)
         idx_sm = torch.arange(max(idx_prot),max(idx_prot)+Ls[1])+200
         idx_pdb = torch.concat([torch.tensor(idx_prot), idx_sm])
-        
+
         seq = msa[0]
         
         # seq, msa_seed_orig, msa_seed, msa_extra, mask_msa = MSAFeaturize(msa, ins, 
@@ -235,30 +241,53 @@ class Model:
 
 
     def insert_contig(self, indep, contig_map, partial_T=False):
+        """
+        Assembl
+        """
         o = copy.deepcopy(indep)
+
 
         # Insert small mol into contig_map
         all_chains = set(ch for ch,_ in contig_map.hal)
+
         # Not yet implemented due to index shifting
-        assert_that(len(all_chains)).is_equal_to(1)
+        # assert_that(len(all_chains)).is_equal_to(1)
+        print(f'WARNING: only 1 chain supported for now. Found {len(all_chains)} chains: {all_chains}')
+
+        # string
         next_unused_chain = next(e for e in contig_map.chain_order if e not in all_chains)
+
+        # number of small molecule atoms
         n_sm = indep.is_sm.sum()
+
+        # list of indices of small molecule atoms - 0 indexed
         is_sm_idx0 = torch.nonzero(indep.is_sm, as_tuple=True)[0].tolist()
         contig_map.ref_idx0.extend(is_sm_idx0)
-        n_protein_hal = len(contig_map.hal)
+
+        n_protein_hal       = len(contig_map.hal)
         contig_map.hal_idx0 = np.concatenate((contig_map.hal_idx0, np.arange(n_protein_hal, n_protein_hal+n_sm)))
+
         max_hal_idx = max(i for _, i  in contig_map.hal)
+
+        # NOTE - this makes all small molecules in the same chain
+        print(f'WARNING: all small molecules in the same chain. Chain: {next_unused_chain}')
         contig_map.hal.extend(zip([next_unused_chain]*n_sm, range(max_hal_idx+200,max_hal_idx+200+n_sm)))
+
         chain_id = np.array([c for c, _ in contig_map.hal])
 
         L_mapped = len(contig_map.hal)
-        n_prot = L_mapped - n_sm
+        n_prot   = L_mapped - n_sm
         L_in, NATOMS, _ = indep.xyz.shape
-        o.xyz = torch.full((L_mapped, NATOMS, 3), np.nan)
 
-        o.xyz[contig_map.hal_idx0] = indep.xyz[contig_map.ref_idx0]
+        # initialize xyz for trajectory - slice in protein atoms from original indep
+        o.xyz = torch.full((L_mapped, NATOMS, 3), np.nan)
+        o.xyz[contig_map.hal_idx0] = indep.xyz[contig_map.ref_idx0]  
+
+        # initialize seq - slice in sequence from original indep
         o.seq = torch.full((L_mapped,), MASKINDEX)
         o.seq[contig_map.hal_idx0] = indep.seq[contig_map.ref_idx0]
+
+        # slice over the "is_sm" mask from the original indep
         o.is_sm = torch.full((L_mapped,), 0).bool()
         o.is_sm[contig_map.hal_idx0] = indep.is_sm[contig_map.ref_idx0]
         o.same_chain = torch.tensor(chain_id[None, :] == chain_id[:, None])
@@ -329,6 +358,7 @@ class Model:
         msa_full:   NSEQ,NINDEL,NTERMINUS,
         msa_masked: NSEQ,NSEQ,NINDEL,NINDEL,NTERMINUS
         '''
+
         NTERMINUS = 2
         NINDEL = 1
         ### msa_masked ###

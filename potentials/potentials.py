@@ -239,6 +239,28 @@ class interface_ncontacts(Potential):
         return self.weight * interface_ncontacts
 
 
+class avoid_X(Potential):
+    """
+    Avoids the X axis 
+    """
+
+    def __init__(self, weight=1, alpha=1, max_penalty=10):
+        self.weight = weight
+        self.alpha = alpha
+        self.max_penalty = max_penalty
+
+    def compute(self, seq, xyz):
+        ca = xyz[:,1] # [L,3]
+
+        # squared distance from x axis
+        sq_xdist   = torch.sqrt(ca[:,1]**2 + ca[:,2]**2)
+        # penalty decays as 1/d**2, clamp at 10
+        penalty = torch.clamp(self.alpha / (sq_xdist), max=self.max_penalty)
+
+        return -self.weight * penalty.sum()
+
+
+
 class monomer_contacts(Potential):
     '''
         Differentiable way to maximise number of contacts within a protein
@@ -769,7 +791,8 @@ implemented_potentials = { 'monomer_ROG':          monomer_ROG,
                            'olig_intra_contacts':  olig_intra_contacts,
                            'olig_contacts':        olig_contacts,
                            'substrate_contacts':   substrate_contacts,
-                           'ligand_ncontacts':     ligand_ncontacts}
+                           'ligand_ncontacts':     ligand_ncontacts,
+                           'avoid_X':              avoid_X}
 
 require_binderlen      = { 'binder_ROG',
                            'binder_distance_ReLU',

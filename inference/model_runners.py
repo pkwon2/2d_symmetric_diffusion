@@ -31,6 +31,7 @@ import util
 import hydra
 from hydra.core.hydra_config import HydraConfig
 import os
+import matplotlib.pyplot as plt 
 
 import sys
 sys.path.append('../') # to access RF structure prediction stuff 
@@ -345,8 +346,12 @@ class Sampler:
         self.contig_map = self.construct_contig(self.target_feats)
 
         indep = self.model_adaptor.make_indep(self._conf.inference.input_pdb, self._conf.inference.ligand)
+
         indep, is_diffused = self.model_adaptor.insert_contig(indep, self.contig_map)
+        
+        
         self.is_diffused = is_diffused
+        
         if self.diffuser_conf.partial_T:
             raise Exception('not implemented')
 
@@ -385,9 +390,73 @@ class Sampler:
             visible = ~is_diffused
 
         self.denoiser = self.construct_denoiser(len(self.contig_map.ref), visible=visible)
+        
+        # symmetrize the inputs 
+        # fig, ax = plt.subplots(1,2)
+        # ax[0].imshow(indep.bond_feats.numpy())
+        # ax[0].set_title('bond feats')
+        # ax[1].imshow(indep.same_chain.numpy())
+        # ax[1].set_title('same chain')
+        # plt.savefig('bond_feats.png')
+        # ic(indep.bond_feats)
+        # ic(indep.same_chain)
+        self.symmids, self.symRs, self.symmeta, self.symmsubs = None,None,None,None
         if self.symmetry is not None:
-            raise Exception('not implemented')
-            xt, seq_t = self.symmetry.apply_symmetry(xt, seq_t)
+            assert self._conf.inference.internal_sym is None, 'cannot use both new (inference.internal_sym) and classic (inference.symmetry) symmetry simultaneously'
+            # classic version
+            xt, seq_t = self.symmetry.apply_symmetry(indep.xyz, indep.seq)
+            
+        
+        elif self._conf.inference.internal_sym is not None:
+            assert self.symmetry is None, 'Cannot use both new (inference.internal_sym) and classic (inference.symmetry) symmetry simultaneously' 
+            # new version, minimal representation of subunits 
+            # find rotation matrices/metadata for symmetry 
+            symmids, symmRs, symmeta, offset = symmetry.get_pointsym_meta(self._conf.inference.internal_sym)
+
+            Lasu = indep.xyz.shape[0]
+            offset         *= (offset*Lasu**(1/3))
+            offset         *= self._conf.inference.offset_scale 
+            indep.xyz       = indep.xyz + offset
+            indep, symmsub  = symmetry.find_minimal_neighbors(indep, symmRs, symmeta) 
+
+            
+
+            # ic(indep.xyz.shape)
+            # ic(indep.xyz[:60,1].mean(0))
+            # ic(indep.xyz[60:,2].mean(0))
+            # chains = ['A']*60 + ['B']*60
+            # util.writepdb('test_c2_indep.pdb',
+            #               indep.xyz,
+            #               indep.seq,
+            #               chain_idx=chains
+            #             )
+            # sys.exit('exiting')
+            
+            # for passing to RF fwd pass in self.sample_step()
+            self.symmids  = symmids.to(self.device)
+            self.symmRs   = symmRs.to(self.device)
+            self.symmeta  = [[symmeta[0][0].to(self.device)], symmeta[1]]
+            self.symmsub  = symmsub.to(self.device)
+
+            # Now alter self.is_diffused to match new shapes 
+            nneigh = len(symmsub)
+            self.is_diffused = self.is_diffused.repeat(nneigh) # copy is_diffused for each subunit 
+
+            # symmetrize the inputs 
+            # fig, ax = plt.subplots(1,2)
+            # ax[0].imshow(indep.bond_feats.numpy())
+            # ax[0].set_title('bond feats')
+            # ax[1].imshow(indep.same_chain.numpy())
+            # ax[1].set_title('same chain')
+            # plt.savefig('bond_feats.png')
+            # ic(indep.bond_feats)
+            # ic(indep.same_chain)
+
+        else:
+            pass # no symmetry
+
+
+
         
         if return_forward_trajectory:
             forward_traj = torch.cat([xyz_true[None], fa_stack[:,:,:]])
@@ -741,11 +810,11 @@ class NRBStyleSelfCond(Sampler):
         '''
 
         rfi = self.model_adaptor.prepro(indep, t, self.is_diffused)
+
         rf2aa.tensor_util.to_device(rfi, self.device)
-        seq_init = torch.nn.functional.one_hot(
-                indep.seq, num_classes=rf2aa.chemical.NAATOKENS).to(self.device).float()
-        seq_t = torch.clone(seq_init)
-        seq_in = torch.clone(seq_init)
+        seq_init = torch.nn.functional.one_hot(indep.seq, num_classes=rf2aa.chemical.NAATOKENS).to(self.device).float()
+        seq_t    = torch.clone(seq_init)
+        seq_in   = torch.clone(seq_init)
 
         # B,N,L = xyz_t.shape[:3]
 
@@ -777,6 +846,13 @@ class NRBStyleSelfCond(Sampler):
                                     # }}
                                     )
 
+                # util.writepdb('rfi_c2_debug.pdb',
+                #               rfi.xyz[0,:,:3,:],
+                #               rfi.seq[0],
+                #               chain_idx=['A']*60+['B']*60)
+                rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)
+                
+                # sys.exit('debugging')
                 if self.symmetry is not None and self.inf_conf.symmetric_self_cond:
                     raise Exception('not implemented')
                     px0 = self.symmetrise_prev_pred(px0=px0,seq_in=seq_in, alpha=alpha)[:,:,:3]
