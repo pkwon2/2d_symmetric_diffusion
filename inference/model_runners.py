@@ -851,10 +851,6 @@ class NRBStyleSelfCond(Sampler):
                                'symmeta':self.symmeta,
                                'symmsub':self.symmsub}) # None by default - see self.sample_init()
 
-                # util.writepdb('rfi_c2_debug.pdb',
-                #               rfi.xyz[0,:,:3,:],
-                #               rfi.seq[0],
-                #               chain_idx=['A']*60+['B']*60)
                 rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)
                 
                 # sys.exit('debugging')

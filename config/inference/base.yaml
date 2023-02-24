@@ -93,7 +93,7 @@ model:
   symmsub_k: null
   sym_method: mean
   copy_main_block_template: False
-  main_block: null
+  main_block: null 
 
 diffuser:
   T: 200

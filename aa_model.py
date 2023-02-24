@@ -38,6 +38,7 @@ MSAMASKED_C_TERM = 2*NAATOKENS + 2*NINDEL + 1
 
 N_TERMINUS = 1
 C_TERMINUS = 2
+import matplotlib.pyplot as plt 
 
 
 NINDEL=1
