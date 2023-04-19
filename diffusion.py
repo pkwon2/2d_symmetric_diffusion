@@ -94,7 +94,13 @@ def get_beta_schedule(T, b0, bT, schedule_type, schedule_params={}, inference=Fa
     """
     Given a noise schedule type, create the beta schedule 
     """
-    assert schedule_type in ['linear', 'geometric', 'cosine']
+    assert schedule_type in ['linear']
+
+    # Adjust b0 and bT if T is not 200
+    # This is a good approximation, with the beta correction below, unless T is very small
+    assert T >= 15, "With discrete time and T < 15, the schedule is badly approximated"
+    b0 *= 200 / T
+    bT *= 200 / T
 
     # linear noise schedule 
     if schedule_type == 'linear':
@@ -905,7 +911,7 @@ class Diffuser():
 
 
         """
-
+        # ic(o.xyz[0])
         if diffusion_mask is None:
             diffusion_mask = torch.zeros(len(xyz.squeeze())).to(dtype=bool)
 
@@ -920,10 +926,13 @@ class Diffuser():
         #Centre unmasked structure at origin, as in training (to prevent information leak)
         if torch.sum(diffusion_mask) != 0:
             self.motif_com=xyz[diffusion_mask,1,:].mean(dim=0) # This is needed for one of the potentials
-            xyz = xyz - self.motif_com
+            # xyz = xyz - self.motif_com
+            print('WARNING: NOT CENTERING STRUCTURE AT ORIGIN')
         elif torch.sum(diffusion_mask) == 0:
-            xyz = xyz - xyz[:,1,:].mean(dim=0)
-
+            # xyz = xyz - xyz[:,1,:].mean(dim=0)
+            print('WARNING: NOT CENTERING STRUCTURE AT ORIGIN')
+            pass 
+        # ic(o.xyz[0])
         #xyz = xyz - xyz[nan_mask][:,1,:].mean(dim=0) # DJ aug 23, 2022 - commenting out bc now better logic to assert no nans 
         xyz_true = torch.clone(xyz)
 

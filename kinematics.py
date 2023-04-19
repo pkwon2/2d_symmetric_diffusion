@@ -305,7 +305,8 @@ def get_init_xyz(xyz_t, is_sm):
 
     #
     center_CA = ((~mask[:,:,:,None]) * torch.nan_to_num(xyz_t[:,:,:,1,:])).sum(dim=2) / ((~mask[:,:,:,None]).sum(dim=2)+1e-4) # (B, T, 3)
-    xyz_t = xyz_t - center_CA.view(B,T,1,1,3)
+    # xyz_t = xyz_t - center_CA.view(B,T,1,1,3)
+    print('WARNING: CENTERING IS DISABLED IN get_init_xyz')
     #
     idx_s = list()
     for i_b in range(B):

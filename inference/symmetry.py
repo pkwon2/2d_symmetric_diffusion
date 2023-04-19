@@ -341,6 +341,17 @@ def generateC(angs, eps=1e-6):
     Rs[:,2,2] = torch.cos(angs)
     return Rs
 
+def generateCz(angs, eps=1e-6):
+    L = angs.shape[0]
+    Rs = torch.eye(3,  device=angs.device).repeat(L,1,1)
+
+    Rs[:,0,0] = torch.cos(angs)
+    Rs[:,0,1] = -torch.sin(angs)
+    Rs[:,1,0] = torch.sin(angs)
+    Rs[:,1,1] = torch.cos(angs)
+
+    return Rs
+
 def generateD(angs, eps=1e-6):
     L = angs.shape[0]
     Rs = torch.eye(3,  device=angs.device).repeat(2*L,1,1)
@@ -371,7 +382,7 @@ def find_minimal_neighbors(indep, Rs, metasymm):
     xyz = indep.xyz[None]
 
 
-    com = xyz[:,:,1].mean(dim=-2)               # center of mass of single chain 
+    com = xyz[:,:,1].mean(dim=-2) # center of mass of single chain 
     rcoms = torch.einsum('sij,bj->si', Rs, com)
 
     # subsymms - list of length 1, torch.arange(nsubs)
@@ -432,6 +443,8 @@ def find_minimal_neighbors(indep, Rs, metasymm):
 
     o.idx           = torch.cat([o.idx[None]+(L_orig+200)*i for i in range(Ncopy)],dim=1).squeeze(0)
     o.is_sm         = torch.cat([o.is_sm[None]]*Ncopy,dim=1).squeeze(0)
+
+    o.terminus_type = torch.cat([o.terminus_type[None]]*Ncopy,dim=1).squeeze(0)
 
     # 2D information
     # bond_feats: 5 at (i,j) = (i,i-1) and (i,i+1) 
@@ -662,7 +675,7 @@ def get_pointsym_meta(symmid):
         )%nsub
 
         angles = torch.linspace(0,2*np.pi,nsub+1)[:nsub]
-        Rs = generateC(angles)
+        Rs = generateCz(angles)
 
         metasymm = (
             [torch.arange(nsub)],   # subunit indices
@@ -676,7 +689,8 @@ def get_pointsym_meta(symmid):
             theta = 2.0*np.pi/nsub
             D = est_radius/np.sin(theta/2)
 
-        offset = torch.tensor([ 0.0, 0.0, float(D) ])
+        # offset = torch.tensor([ 0.0, 0.0, float(D) ])
+        offset = torch.tensor([float(D), 0.0, 0.0])
     
     elif (symmid[0].upper()=='D'):
         nsub = int(symmid[1:])
@@ -1145,3 +1159,100 @@ def get_pointsym_meta(symmid):
         assert False
 
     return symmatrix, Rs,metasymm, offset
+
+def propogate_repeat_features(indep, Lasu):
+    """
+    Propogates tensor information for repeat proteins
+
+    Parameters
+    ----------
+    """
+    Ncopy = len(indep.xyz.squeeze()) // Lasu 
+
+    o = copy.deepcopy(indep)
+
+    # Helper functions
+    ################ 
+    ################
+    # def copy_1d(x, L, ncopy):
+    #     for i in range(ncopy):
+    #         start = i*L
+    #         end = (i+1)*L
+    #         x[start:end] = x[:L]
+    #     return x
+
+    def copy_1d_reverse(x,L,ncopy):
+        master = x[-L:]
+
+        for i in range(ncopy):
+            start = i*L
+            end = (i+1)*L
+            x[start:end] = master
+        
+        return x
+    
+    def copy_2d_diag_reverse(x, lasu):
+        assert x.shape[0] % lasu == 0
+
+        # copy along the diagonal 
+        new = torch.zeros_like(x)
+        n = x.shape[0] // lasu 
+
+        for i in range(n):
+            start = i * lasu
+            end = (i+1) * lasu
+            new[start:end, start:end] = x[-lasu:, -lasu:]
+                
+
+        return new
+    
+    def get_repeat_same_chain(is_metal):
+        A = is_metal[:,None] == is_metal[None,:] # correct but has off diag metals as True (same chain)
+        B = is_metal[:,None] &  is_metal[None,:] # places where i,j are metals 
+
+        i,j = torch.where(B) # indices where metals 
+
+        # set off diag metals to False
+        use = (i != j)
+        i = i[use]
+        j = j[use]
+
+        A[i,j] = False # set off diag metals to False (not same chain)
+
+        return A 
+    ################
+    ################ 
+
+
+    # 1D information 
+    ################
+    # copy first ASU of sequence over (reverse because SM is put last)
+    o.seq   = copy_1d_reverse(o.seq,         Lasu, Ncopy)
+    o.is_sm = copy_1d_reverse(o.is_sm,       Lasu, Ncopy)
+
+
+    # duplicate atom frames for the metal atoms
+    print('WARNING: Duplicating atom frames in a non-general way (metals only, single atom)')
+    o.atom_frames = o.atom_frames.repeat(Ncopy,1,1)
+
+    # increment each sm index by (Lasu + 200)
+    (i_sm,) = torch.where(o.is_sm) # only single dim 
+    assert len(i_sm)
+
+    for i in i_sm:
+        o.idx[i]    += (Lasu*i + 200) # make this metal its own chain
+        
+        if i < len(o.idx) - 2:
+            o.idx[1+i:] -= 1              # de-increment the next atoms so that the chain remains continuous
+
+    # 2D information
+    # Bond features
+    o.bond_feats = copy_2d_diag_reverse(o.bond_feats, Lasu)
+    
+    print('WARNING: repeat prot symmetrization assumes metals only')
+    is_metal = o.seq > 21
+    o.same_chain = get_repeat_same_chain(o.is_sm)
+
+    # torch.save(o, "tmp_indep.pt")
+
+    return o

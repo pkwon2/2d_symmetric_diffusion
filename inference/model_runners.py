@@ -15,6 +15,7 @@ from rf2aa.RoseTTAFoldModel import RoseTTAFoldModule
 from rf2aa.kinematics import xyz_to_c6d, c6d_to_bins, xyz_to_t2d, get_chirals
 import rf2aa.parsers
 import rf2aa.tensor_util
+from rf2aa.Track_module import update_symm_Rs
 import aa_model
 import dataclasses
 
@@ -353,13 +354,14 @@ class Sampler:
 
         indep = self.model_adaptor.make_indep(self._conf.inference.input_pdb, self._conf.inference.ligand)
 
-        indep, is_diffused = self.model_adaptor.insert_contig(indep, self.contig_map)
+        is_partial = self.diffuser_conf.partial_T is not None
+        indep, is_diffused = self.model_adaptor.insert_contig(indep, self.contig_map, partial_T=is_partial) 
         
         
         self.is_diffused = is_diffused
         
-        if self.diffuser_conf.partial_T:
-            raise Exception('not implemented')
+        # if self.diffuser_conf.partial_T:
+        #     # raise Exception('not implemented')
 
         # Diffuse the contig-mapped coordinates 
         if self.diffuser_conf.partial_T:
@@ -367,7 +369,15 @@ class Sampler:
             self.t_step_input = int(self.diffuser_conf.partial_T)
         else:
             self.t_step_input = int(self.diffuser_conf.T)
+
+
         t_list = np.arange(1, self.t_step_input+1)
+
+        # save coordinates at this step just to double check
+        # tmp_outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/inputs/tmp/'
+        # fp1 = os.path.join(tmp_outdir, 'indep_crds_before_diffusion.pdb')
+        # util.writepdb(fp1, indep.xyz[:,:14,:], indep.seq)
+        
 
         atom_mask = None
         seq_one_hot = None
@@ -384,29 +394,28 @@ class Sampler:
         xt = torch.clone(xT)
         indep.xyz = xt
 
+        # # now save again after diffusion 
+        # fp2 = os.path.join(tmp_outdir, 'indep_crds_after_diffusion.pdb')
+        # util.writepdb(fp2, indep.xyz[:,:14,:], indep.seq)
+
+        # sys.exit('Exiting early')
+
         if self.diffuser_conf.partial_T and self.seq_diffuser is None:
-            raise Exception('not implemented')
-            is_motif = self.mask_seq.squeeze()
-            is_shown_at_t = torch.tensor(aa_masks[-1])
+            is_motif = ~is_diffused 
+            is_shown_at_t = torch.full_like(is_motif, False)
             visible = is_motif | is_shown_at_t
             if self.diffuser_conf.partial_T:
-                seq_t[visible] = seq_orig[visible]
+                # seq_t[visible] = seq_orig[visible]
+                indep.seq = torch.full_like(indep.seq, 20)
         else:
             # Sequence diffusion
             visible = ~is_diffused
 
         self.denoiser = self.construct_denoiser(len(self.contig_map.ref), visible=visible)
         
+
         # symmetrize the inputs 
-        # fig, ax = plt.subplots(1,2)
-        # ax[0].imshow(indep.bond_feats.numpy())
-        # ax[0].set_title('bond feats')
-        # ax[1].imshow(indep.same_chain.numpy())
-        # ax[1].set_title('same chain')
-        # plt.savefig('bond_feats.png')
-        # ic(indep.bond_feats)
-        # ic(indep.same_chain)
-        self.symmids, self.symRs, self.symmeta, self.symmsubs = None,None,None,None
+        self.symmids, self.symmRs, self.symmeta, self.symmsub = None,None,None,None
         if self.symmetry is not None:
             assert self._conf.inference.internal_sym is None, 'cannot use both new (inference.internal_sym) and classic (inference.symmetry) symmetry simultaneously'
             # classic version
@@ -419,24 +428,25 @@ class Sampler:
             # find rotation matrices/metadata for symmetry 
             symmids, symmRs, symmeta, offset = symmetry.get_pointsym_meta(self._conf.inference.internal_sym)
 
+            # if partial_T, offset should be scaled according to current distance from sym ax
+            if self.diffuser_conf.partial_T and 'c' in self._conf.inference.internal_sym.lower():
+                com     = torch.mean(indep.xyz[:,1:2,:], dim=0, keepdim=True)
+                proj_xy = com - com[...,-1] # project onto xy plane by subtracting z coord
+                offset  = proj_xy
+
+            # scale offset w.r.t ASU length 
             Lasu = indep.xyz.shape[0]
-            offset         *= (offset*Lasu**(1/3))
+            self.Lasu = Lasu
+            if 'c' in self._conf.inference.internal_sym.lower():
+                offset *= (Lasu**(1/2))
+            else:
+                offset *= (Lasu**(1/3))
+
+            # scale offset manually 
             offset         *= self._conf.inference.offset_scale 
             indep.xyz       = indep.xyz + offset
             indep, symmsub  = symmetry.find_minimal_neighbors(indep, symmRs, symmeta) 
 
-            
-
-            # ic(indep.xyz.shape)
-            # ic(indep.xyz[:60,1].mean(0))
-            # ic(indep.xyz[60:,2].mean(0))
-            # chains = ['A']*60 + ['B']*60
-            # util.writepdb('test_c2_indep.pdb',
-            #               indep.xyz,
-            #               indep.seq,
-            #               chain_idx=chains
-            #             )
-            # sys.exit('exiting')
             
             # for passing to RF fwd pass in self.sample_step()
             self.symmids  = symmids.to(self.device)
@@ -444,22 +454,25 @@ class Sampler:
             self.symmeta  = [[symmeta[0][0].to(self.device)], symmeta[1]]
             self.symmsub  = symmsub.to(self.device)
 
+            print('ENTERED SYMMETRY MODE*****************')
+
             # Now alter self.is_diffused to match new shapes 
             nneigh = len(symmsub)
             self.is_diffused = self.is_diffused.repeat(nneigh) # copy is_diffused for each subunit 
 
-            # symmetrize the inputs 
-            # fig, ax = plt.subplots(1,2)
-            # ax[0].imshow(indep.bond_feats.numpy())
-            # ax[0].set_title('bond feats')
-            # ax[1].imshow(indep.same_chain.numpy())
-            # ax[1].set_title('same chain')
-            # plt.savefig('bond_feats.png')
-            # ic(indep.bond_feats)
-            # ic(indep.same_chain)
+            # write test pdb after symmetrization 
+            # fp3 = os.path.join(tmp_outdir, 'indep_crds_after_symmetrization.pdb')
+            # util.writepdb(fp3, indep.xyz[:,:14,:], indep.seq)
+            # sys.exit('Exiting early after symmetrization')
 
-        else:
-            pass # no symmetry
+        # repeat proteins
+        elif self._conf.model.symmetrize_repeats:
+            Lasu     = self._conf.model.repeat_length 
+            assert indep.xyz.shape[0] % Lasu == 0, 'Lasu must be a factor of the number of tokens'
+
+            indep = symmetry.propogate_repeat_features(indep, Lasu)
+            self.denoiser.decode_scheduler.visible[indep.is_sm] = True # all sm are visible/not diffused
+
 
 
 
@@ -814,6 +827,11 @@ class NRBStyleSelfCond(Sampler):
             tors_t_1: (L, ?) The updated torsion angles of the next  step.
             plddt: (L, 1) Predicted lDDT of x0.
         '''
+        # for key in vars(indep).keys():
+        #     t  = getattr(indep, key)
+        #     if isinstance(t, torch.Tensor):
+        #         print(key)
+        #         ic(t.shape)
 
         rfi = self.model_adaptor.prepro(indep, t, self.is_diffused)
 
@@ -872,8 +890,9 @@ class NRBStyleSelfCond(Sampler):
 
                         t1d[:,:,:,:20] = logits[:,None,:,:20]
                         t1d[:,:,:,20]  = 0 # Setting mask token to zero
-        px0 = rfo.get_xyz()[:,:14]
-        logits = rfo.get_seq_logits()
+
+        px0         = rfo.get_xyz()[:,:14]
+        logits      = rfo.get_seq_logits()
         seq_decoded = [rf2aa.chemical.num2aa[s] for s in rfi.seq[0]]
 
         if self.seq_diffuser is None:
@@ -908,7 +927,7 @@ class NRBStyleSelfCond(Sampler):
                 pseq0=pseq_0,
                 diffuse_sidechains=self.preprocess_conf.sidechain_input,
                 align_motif=self.inf_conf.align_motif,
-                include_motif_sidechains=self.preprocess_conf.motif_sidechain_input,
+                include_motif_sidechains=self.preprocess_conf.motif_sidechain_input
             )
         else:
             px0 = px0.cpu()
@@ -918,6 +937,17 @@ class NRBStyleSelfCond(Sampler):
 
             # Dummy tors_t_1 prediction. Not used in final output.
             tors_t_1 = torch.ones((self.is_diffused.shape[-1], 10, 2))
+
+        ic(x_t_1.shape)
+        if self._conf.inference.internal_sym is not None:
+            # Re-symmetrize after stochastic denoising step 
+            fake_indep = copy.deepcopy(indep)  # dummy indep, just to pass current set of crds to get neighbor list 
+            fake_indep.xyz = x_t_1.to(device=self.symmRs.device)
+            _, symmsub  = symmetry.find_minimal_neighbors(fake_indep, self.symmRs, self.symmeta)
+
+            ic(x_t_1.shape)
+            x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs).squeeze(0)
+            ic(x_t_1.shape)
 
         px0 = px0.cpu()
         x_t_1 = x_t_1.cpu()

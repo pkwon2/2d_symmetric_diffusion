@@ -39,6 +39,7 @@ MSAMASKED_C_TERM = 2*NAATOKENS + 2*NINDEL + 1
 N_TERMINUS = 1
 C_TERMINUS = 2
 import matplotlib.pyplot as plt 
+import sys 
 
 
 NINDEL=1
@@ -150,6 +151,13 @@ def filter_het(pdb_lines, ligand):
             raise Exception(f'line {l} references atom ids in the target ligand {ligand} and another atom')
     return lines
 
+def to_cpu(x):
+    if isinstance(x, torch.Tensor):
+        return x.cpu()
+    return x
+
+def to_cpu_dict(d):
+    return {k: to_cpu(v) for k, v in d.items()}
 
 class Model:
 
@@ -161,6 +169,9 @@ class Model:
         # ipdb.set_trace()
         rfi_dict = dataclasses.asdict(rfi)
         # assert set(rfi_dict.keys()) - set()
+        # ic({**rfi_dict, **kwargs}.keys())
+        # torch.save(to_cpu_dict({**rfi_dict, **kwargs}), 'rfi_data.pt')
+        # sys.exit('Exiting after saving rfi.pt')
         return RFO(*self.model(**{**rfi_dict, **kwargs}))
 
     def make_indep(self, pdb, parse_hetatm):
@@ -262,6 +273,8 @@ class Model:
         """
         o = copy.deepcopy(indep)
 
+        ic(o.xyz[0])
+
 
         # Insert small mol into contig_map
         all_chains = set(ch for ch,_ in contig_map.hal)
@@ -296,8 +309,13 @@ class Model:
         L_in, NATOMS, _ = indep.xyz.shape
 
         # initialize xyz for trajectory - slice in protein atoms from original indep
-        o.xyz = torch.full((L_mapped, NATOMS, 3), np.nan)
-        o.xyz[contig_map.hal_idx0] = indep.xyz[contig_map.ref_idx0]  
+        if not partial_T:
+            o.xyz = torch.full((L_mapped, NATOMS, 3), np.nan)
+            o.xyz[contig_map.hal_idx0] = indep.xyz[contig_map.ref_idx0]  
+        else:
+            o.xyz = indep.xyz 
+            # The initial coordinates should be exactly the coordinates that 
+            # were parsed out of the protein 
 
         # initialize seq - slice in sequence from original indep
         o.seq = torch.full((L_mapped,), MASKINDEX)
@@ -339,6 +357,7 @@ class Model:
 
         # To see the shapes of the indep struct with contig inserted
         # print(rf2aa.tensor_util.info(rf2aa.tensor_util.to_ordered_dict(o)))
+        ic(o.xyz[0])
         return o, is_diffused
 
 
