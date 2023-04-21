@@ -428,11 +428,16 @@ class Sampler:
             # find rotation matrices/metadata for symmetry 
             symmids, symmRs, symmeta, offset = symmetry.get_pointsym_meta(self._conf.inference.internal_sym)
 
-            # if partial_T, offset should be scaled according to current distance from sym ax
+            # if partial_T, offset should be directly opposite of the vector from 
+            # the center of mass to the axis of symmetry 
             if self.diffuser_conf.partial_T and 'c' in self._conf.inference.internal_sym.lower():
+                offset  = None 
                 com     = torch.mean(indep.xyz[:,1:2,:], dim=0, keepdim=True)
                 proj_xy = com - com[...,-1] # project onto xy plane by subtracting z coord
-                offset  = proj_xy
+                print('WARNING: OFFSET ASSUMES SYMMETRY AXIS IS ALIGNED WITH Z AXIS')
+                offset  = proj_xy 
+                offset  = offset / torch.norm(offset, dim=-1, keepdim=True) # normalize
+
 
             # scale offset w.r.t ASU length 
             Lasu = indep.xyz.shape[0]
