@@ -172,6 +172,8 @@ class Model:
         # ic({**rfi_dict, **kwargs}.keys())
         # torch.save(to_cpu_dict({**rfi_dict, **kwargs}), 'rfi_data.pt')
         # sys.exit('Exiting after saving rfi.pt')
+        # with torch.cuda.amp.autocast(True):
+        self.model.eval()
         return RFO(*self.model(**{**rfi_dict, **kwargs}))
 
     def make_indep(self, pdb, parse_hetatm):
@@ -253,6 +255,8 @@ class Model:
         terminus_type[0] = N_TERMINUS
         terminus_type[Ls[0]-1] = C_TERMINUS
 
+        ic(xyz.shape)
+
         indep = Indep(
             seq,
             xyz,
@@ -273,7 +277,7 @@ class Model:
         """
         o = copy.deepcopy(indep)
 
-        ic(o.xyz[0])
+        ic(o.xyz[0].shape)
 
 
         # Insert small mol into contig_map
@@ -357,7 +361,7 @@ class Model:
 
         # To see the shapes of the indep struct with contig inserted
         # print(rf2aa.tensor_util.info(rf2aa.tensor_util.to_ordered_dict(o)))
-        ic(o.xyz[0])
+        ic(o.xyz.shape)
         return o, is_diffused
 
 
@@ -448,6 +452,14 @@ class Model:
         else:
             xyz_t[is_diffused,3:,:] = float('nan')
         #xyz_t[:,3:,:] = float('nan')
+
+        # DJ - check if using inference.start_from_input
+        # if so, chop off the atoms after 14: 
+        if self.conf.inference.start_from_input:
+            print('Warning: start_from_input is True, so chopping off atoms after 14')
+            xyz_t = xyz_t.squeeze()[:,:14,:]
+            xyz_t[:,3:,:] = float('nan')
+
 
         assert_that(xyz_t.shape).is_equal_to((L,NHEAVYPROT,3))
         xyz_t=xyz_t[None, None]
@@ -540,7 +552,6 @@ class Model:
         xyz_t = torch.zeros(1,1,L,3)
         t2d = torch.zeros(1,1,L,L,68)
 
-        ic(xyz.shape)
         # ic(
         #     xyz[0, is_diffused][0][:,0], # nan 3:
         #     xyz[0, indep.is_sm][0][:,0], # nan 14:
@@ -562,6 +573,9 @@ class Model:
         xyz[0, is_diffused*~indep.is_sm,3:] = torch.nan
         xyz[0, indep.is_sm,14:] = 0
         xyz[0, is_protein_motif, 14:] = 0
+
+        ic(xyz.shape)
+        ic(xyz_t.shape)
 
         # Note: should be batched
         rfi = RFI(

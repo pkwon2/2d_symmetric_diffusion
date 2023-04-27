@@ -37,6 +37,7 @@ inference:
   ligand: null
   internal_sym: null
   offset_scale: 1.0
+  start_from_input: False
 
 contigmap:
   contigs: ['20', 'A3-23', '30']
@@ -94,6 +95,7 @@ model:
   sym_method: mean
   copy_main_block_template: False
   main_block: null 
+  opt_sym_start: -1
 
 diffuser:
   T: 200

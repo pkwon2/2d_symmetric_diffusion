@@ -460,16 +460,6 @@ def find_minimal_neighbors(indep, Rs, metasymm):
     o.bond_feats = new_bond_feats
     o.same_chain = new_same_chain
 
-    # ic(o.xyz.shape)
-    # ic(o.atom_frames.shape)
-    # ic(o.bond_feats.shape)
-    # ic(o.chirals.shape)
-    # ic(o.idx.shape)
-    # ic(o.is_sm.shape)
-    # ic(o.same_chain.shape)
-    # ic(o.seq.shape)
-    
-
     return o, subs
 
 def get_symm_map(subs,O):
@@ -689,7 +679,7 @@ def get_pointsym_meta(symmid):
             theta = 2.0*np.pi/nsub
             D = est_radius/np.sin(theta/2)
 
-        # offset = torch.tensor([ 0.0, 0.0, float(D) ])
+        # offset = torch.tensor([ 0.0, 0.0, float(D) ]) # original for sym about X
         offset = torch.tensor([float(D), 0.0, 0.0])
     
     elif (symmid[0].upper()=='D'):

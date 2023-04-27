@@ -279,8 +279,16 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
         assert seq_particle is not None, 'Why is xyz_particle not None but seq_particle is None?'
         chain_Ls_symm = [Lasu]*(xyz_particle.shape[0]//Lasu)
         out = f'{out_prefix}_symm.pdb'
+
+        if len(chain_Ls_symm) > 26:
+            print('Truncating full particle for PDB writing')
+            xyz_particle = xyz_particle[:Lasu*26]
+            seq_particle = seq_particle[:Lasu*26]
+            chain_Ls_symm = chain_Ls_symm[:26]
+            print(len(chain_Ls_symm))
+
         with open(out, 'w') as f:
-            rf2aa.util.writepdb_file(f, xyz_particle.cpu(), torch.zeros_like(seq_particle).long(), chain_Ls=chain_Ls_symm)
+            rf2aa.util.writepdb_file(f, xyz_particle.cpu(), seq_particle.long(), chain_Ls=chain_Ls_symm)
 
     # trajectory pdbs
     traj_prefix = os.path.dirname(out_prefix)+'/traj/'+os.path.basename(out_prefix)

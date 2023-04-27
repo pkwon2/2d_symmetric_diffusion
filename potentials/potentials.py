@@ -26,6 +26,76 @@ class Potential:
                                                      by taking a step along it's gradient
         '''
         raise NotImplementedError('Potential compute function was not overwritten')
+    
+
+class Zstretch(Potential):
+    """
+    Potential for stretching points out along the z axis: 
+    """
+
+    def __init__(self, weight=1, scale=1.2):
+        self.weight = weight
+        self.scale = scale
+
+    def compute(self, seq, xyz):
+        """
+        Computes gradient of how far each point is from being scaled by self.scale. 
+        """
+        ca = xyz[:,1] # [L,3]
+        z = ca[:,-1] 
+
+        z_scaled = z*self.scale
+        delta = z_scaled - z
+
+        return torch.sum(delta)*self.weight
+    
+
+class funnel(Potential):
+    """
+    Applies a potential encouraging funnel shape along some axis
+
+    Generic formulation will be P = f(sqrt(x^2+y^2))*g(z)*v, so we are somehow scaling with (a) the distance from the axis and (b) the z coordinate
+    
+    """
+
+    def __init__(self, weight=1, rad_cut=15, cut_zscale=30, zcut=10):
+        self.weight = weight
+        self.rad_cut = rad_cut
+        self.cut_zscale = cut_zscale
+        self.zcut = zcut
+
+    def compute(self, seq, xyz):
+
+        CA = xyz[:,1] # [L,3]
+
+        x,y,z = CA[:,0], CA[:,1], CA[:,2]
+
+        # loss = -torch.abs(z)*torch.sqrt(x**2 + y**2 + 1e-6)
+        loss = self.cone_loss(x,y,z)
+
+        return loss.sum()*self.weight
+    
+    def cone_loss(self, x,y,z):
+        """
+        """
+        cutoff = self.rad_cut
+        radius = torch.sqrt(x**2 + y**2 + z**2)
+
+        loss = torch.zeros_like(x)
+
+        mask = z <= self.zcut 
+        ic(mask.shape)
+        ic(mask.sum())
+        loss[mask]  = -z[mask]*torch.sqrt(x[mask]**2 + y[mask]**2 + 1e-6)
+        loss[~mask] = -z[~mask]*self.cut_zscale 
+
+        ic(torch.norm(loss[mask]))
+        ic(torch.norm(loss[~mask]))
+
+        # negative sign is important here
+        # due to mask definition and loss definition
+        return -loss 
+
 
 class monomer_ROG(Potential):
     '''
@@ -664,6 +734,7 @@ class substrate_contacts(Potential):
             self.motif_frame = xyz[rand_idx[0],:4]
             self.motif_mapping = [(rand_idx, i) for i in range(4)]
 
+
 class binder_distance_ReLU(Potential):
     '''
         Given the current coordinates of the diffusion trajectory, calculate a potential that is the distance between each residue
@@ -792,7 +863,9 @@ implemented_potentials = { 'monomer_ROG':          monomer_ROG,
                            'olig_contacts':        olig_contacts,
                            'substrate_contacts':   substrate_contacts,
                            'ligand_ncontacts':     ligand_ncontacts,
-                           'avoid_X':              avoid_X}
+                           'avoid_X':              avoid_X,
+                           'funnel':               funnel,
+                           'Zstretch':             Zstretch,}
 
 require_binderlen      = { 'binder_ROG',
                            'binder_distance_ReLU',

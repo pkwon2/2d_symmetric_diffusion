@@ -33,6 +33,9 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 import os
 import matplotlib.pyplot as plt 
+from memory import mem_report
+
+REPORT_MEM=False
 
 import sys
 sys.path.append('../') # to access RF structure prediction stuff 
@@ -286,12 +289,12 @@ class Sampler:
         # HACK: TODO: save this in the model config
         self.loss_param = {'lj_lin': 0.75}
         model = RoseTTAFoldModule(
-            symmetrize_repeats=None, 
-            repeat_length=None,
-            symmsub_k=None,
-            sym_method=None,
-            main_block=None,
-            copy_main_block_template=None,
+            # symmetrize_repeats=None, 
+            # repeat_length=None,
+            # symmsub_k=None,
+            # sym_method=None,
+            # main_block=None,
+            # copy_main_block_template=None,
             **self._conf.model,
             aamask=self.aamask,
             atom_type_index=self.atom_type_index,
@@ -377,22 +380,35 @@ class Sampler:
         # tmp_outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/inputs/tmp/'
         # fp1 = os.path.join(tmp_outdir, 'indep_crds_before_diffusion.pdb')
         # util.writepdb(fp1, indep.xyz[:,:14,:], indep.seq)
-        
+    
 
         atom_mask = None
         seq_one_hot = None
-        fa_stack, aa_masks, xyz_true = self.diffuser.diffuse_pose(
-            indep.xyz,
-            seq_one_hot,
-            atom_mask,
-            indep.is_sm,
-            diffusion_mask=~is_diffused,
-            t_list=t_list,
-            diffuse_sidechains=self.preprocess_conf.sidechain_input,
-            include_motif_sidechains=self.preprocess_conf.motif_sidechain_input)
-        xT = fa_stack[-1].squeeze()[:,:14,:]
-        xt = torch.clone(xT)
-        indep.xyz = xt
+        if not self.inf_conf.start_from_input:
+            fa_stack, aa_masks, xyz_true = self.diffuser.diffuse_pose(
+                indep.xyz,
+                seq_one_hot,
+                atom_mask,
+                indep.is_sm,
+                diffusion_mask=~is_diffused,
+                t_list=t_list,
+                diffuse_sidechains=self.preprocess_conf.sidechain_input,
+                include_motif_sidechains=self.preprocess_conf.motif_sidechain_input)
+            xT = fa_stack[-1].squeeze()[:,:14,:]
+            xt = torch.clone(xT)
+            indep.xyz = xt
+        
+        else:
+            print('Starting from input coordinates instead of diffusing')
+            # user wants to start from input coordinates - presumably already diffused
+            aa_masks = None
+            fa_stack = None
+            xyz_true = None
+
+            xT = indep.xyz[:,:14,:]
+            xt = torch.clone(xT) 
+            indep.xyz = xt
+    
 
         # # now save again after diffusion 
         # fp2 = os.path.join(tmp_outdir, 'indep_crds_after_diffusion.pdb')
@@ -435,8 +451,17 @@ class Sampler:
                 com     = torch.mean(indep.xyz[:,1:2,:], dim=0, keepdim=True)
                 proj_xy = com - com[...,-1] # project onto xy plane by subtracting z coord
                 print('WARNING: OFFSET ASSUMES SYMMETRY AXIS IS ALIGNED WITH Z AXIS')
-                offset  = proj_xy 
-                offset  = offset / torch.norm(offset, dim=-1, keepdim=True) # normalize
+                offset  = proj_xy / torch.norm(offset, dim=-1, keepdim=True) # normalize
+
+            
+            # check if motif scaffolding with rigid particle size 
+            if self.is_diffused.sum() != len(self.is_diffused.flatten()):
+                print('Detected motif scaffolding from contigs, offset is in the direction of the motif COM')
+                # offset should be toward the COM of the motif
+                offset = None 
+                motif_com = torch.mean(indep.xyz[self.is_diffused], dim=0, keepdim=True)
+                norm = torch.norm(motif_com, dim=-1, keepdim=True)
+                offset = motif_com / norm
 
 
             # scale offset w.r.t ASU length 
@@ -447,10 +472,22 @@ class Sampler:
             else:
                 offset *= (Lasu**(1/3))
 
+            # write pdb before offset 
+            # tmp_outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/experiments/sym_scaffold/debug5/'
+            # fp1 = os.path.join(tmp_outdir, 'indep_crds_before_offset.pdb')
+            # util.writepdb(fp1, indep.xyz[:,:14,:], indep.seq)
+
             # scale offset manually 
-            offset         *= self._conf.inference.offset_scale 
-            indep.xyz       = indep.xyz + offset
-            indep, symmsub  = symmetry.find_minimal_neighbors(indep, symmRs, symmeta) 
+            offset *= self._conf.inference.offset_scale 
+            indep.xyz[~self.is_diffused] = indep.xyz[~self.is_diffused] + offset
+            # # write pdb after offset
+            # fp2 = os.path.join(tmp_outdir, 'indep_crds_after_offset.pdb')
+            # util.writepdb(fp2, indep.xyz[:,:14,:], indep.seq)
+
+            # sys.exit('Exiting early') 
+            indep, symmsub  = symmetry.find_minimal_neighbors(indep, symmRs, symmeta)
+
+            
 
             
             # for passing to RF fwd pass in self.sample_step()
@@ -497,6 +534,8 @@ class Sampler:
         self.pair_prev = None
         self.state_prev = None
         
+        # ic(indep.xyz.shape)
+        # assert False
         return indep
 
     def _preprocess(self, seq, xyz_t, t, repack=False):
@@ -856,6 +895,7 @@ class NRBStyleSelfCond(Sampler):
             rfi = aa_model.self_cond(indep, rfi, rfo)
 
         if self.symmetry is not None:
+            idx_pdb = rfi.idx
             idx_pdb, self.chain_idx = self.symmetry.res_idx_procesing(res_idx=idx_pdb)
 
         with torch.no_grad():
@@ -873,13 +913,28 @@ class NRBStyleSelfCond(Sampler):
                                'symmRs' :self.symmRs,
                                'symmeta':self.symmeta,
                                'symmsub':self.symmsub}) # None by default - see self.sample_init()
+                kwargs.update({'t':t})
+                
+                if REPORT_MEM:
+                    print('MEM REPORT LINE 916 model runners')
+                    mem_report() 
+                    print('*'*50+'\n\n')
 
                 rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)
+                print('********* SUCCESSFULL MODEL FORWARD *******')
+
+                if REPORT_MEM:
+                    print('MEM REPORT LINE 920 MODEL RUNNERS')
+                    mem_report()
+                    print('*'*50+'\n\n')
                 
                 # sys.exit('debugging')
-                if self.symmetry is not None and self.inf_conf.symmetric_self_cond:
-                    raise Exception('not implemented')
-                    px0 = self.symmetrise_prev_pred(px0=px0,seq_in=seq_in, alpha=alpha)[:,:,:3]
+                if False: 
+                #if self.symmetry is not None and self.inf_conf.symmetric_self_cond:
+                    print('WARNING: SYMMETRIZED SELF COND NOT OCCURING - NOT IMPLEMENTED')
+                    print('WARNING: DJ has not validated symmetric self cond in all atom')
+                    px0 = self.symmetrise_prev_pred(px0=rfo.xyz_allatom[:,:14], seq_in=rfo.seq, alpha=alpha)[:,:,:3]
+
 
                 # To permit 'recycling' within a timestep, in a manner akin to how this model was trained
                 # Aim is to basically just replace the xyz_t with the model's last px0, and to *not* recycle the state, pair or msa embeddings
@@ -943,16 +998,13 @@ class NRBStyleSelfCond(Sampler):
             # Dummy tors_t_1 prediction. Not used in final output.
             tors_t_1 = torch.ones((self.is_diffused.shape[-1], 10, 2))
 
-        ic(x_t_1.shape)
         if self._conf.inference.internal_sym is not None:
             # Re-symmetrize after stochastic denoising step 
             fake_indep = copy.deepcopy(indep)  # dummy indep, just to pass current set of crds to get neighbor list 
             fake_indep.xyz = x_t_1.to(device=self.symmRs.device)
             _, symmsub  = symmetry.find_minimal_neighbors(fake_indep, self.symmRs, self.symmeta)
 
-            ic(x_t_1.shape)
             x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs).squeeze(0)
-            ic(x_t_1.shape)
 
         px0 = px0.cpu()
         x_t_1 = x_t_1.cpu()
@@ -960,6 +1012,10 @@ class NRBStyleSelfCond(Sampler):
 
         if self.symmetry is not None:
             x_t_1, seq_t_1 = self.symmetry.apply_symmetry(x_t_1, seq_t_1)
+        
+        if REPORT_MEM:
+            print('MEM REPORT END OF MODEL_RUNNERS.SAMPLE_STEP')
+            mem_report()
 
         return px0, x_t_1, seq_t_1, tors_t_1, None, rfo
 
