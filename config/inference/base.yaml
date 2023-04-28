@@ -95,7 +95,7 @@ model:
   sym_method: mean
   copy_main_block_template: False
   main_block: null 
-  opt_sym_start: -1
+  symm_fit_start: -1
 
 diffuser:
   T: 200

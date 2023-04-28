@@ -479,7 +479,7 @@ class Sampler:
 
             # scale offset manually 
             offset *= self._conf.inference.offset_scale 
-            indep.xyz[~self.is_diffused] = indep.xyz[~self.is_diffused] + offset
+            indep.xyz[self.is_diffused] = indep.xyz[self.is_diffused] + offset
             # # write pdb after offset
             # fp2 = os.path.join(tmp_outdir, 'indep_crds_after_offset.pdb')
             # util.writepdb(fp2, indep.xyz[:,:14,:], indep.seq)
@@ -1004,7 +1004,7 @@ class NRBStyleSelfCond(Sampler):
             fake_indep.xyz = x_t_1.to(device=self.symmRs.device)
             _, symmsub  = symmetry.find_minimal_neighbors(fake_indep, self.symmRs, self.symmeta)
 
-            x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs).squeeze(0)
+            x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs, fit_symm=False).squeeze(0)
 
         px0 = px0.cpu()
         x_t_1 = x_t_1.cpu()
