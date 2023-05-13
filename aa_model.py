@@ -23,6 +23,7 @@ import inference.utils
 import networkx as nx
 import itertools
 import random
+from typing import Optional 
 
 
 NINDEL=1
@@ -69,6 +70,11 @@ class Indep:
     same_chain: torch.Tensor
     is_sm: torch.Tensor
     terminus_type: torch.Tensor
+
+    # dj - new subsymmetric template information 
+    subsymm_seq: Optional[torch.Tensor] = None
+    subsymm_xyz: Optional[torch.Tensor] = None
+    mask_t_2d_subsymm: Optional[torch.Tensor] = None
 
     def write_pdb(self, path):
         ic(self.xyz.shape, self.seq.shape)
@@ -255,7 +261,6 @@ class Model:
         terminus_type[0] = N_TERMINUS
         terminus_type[Ls[0]-1] = C_TERMINUS
 
-        ic(xyz.shape)
 
         indep = Indep(
             seq,
@@ -276,8 +281,6 @@ class Model:
         Assembl
         """
         o = copy.deepcopy(indep)
-
-        ic(o.xyz[0].shape)
 
 
         # Insert small mol into contig_map
@@ -550,7 +553,7 @@ class Model:
 
         # NO SELF COND
         xyz_t = torch.zeros(1,1,L,3)
-        t2d = torch.zeros(1,1,L,L,68)
+        t2d   = torch.zeros(1,1,L,L,68)
 
         # ic(
         #     xyz[0, is_diffused][0][:,0], # nan 3:
@@ -826,10 +829,12 @@ def self_cond(indep, rfi, rfo):
     B = 1
     L = indep.xyz.shape[0]
     rfi_sc = copy.deepcopy(rfi)
-    zeros = torch.zeros(B,1,L,36-3,3).float().to(rfi.xyz.device)
-    xyz_t = torch.cat((rfo.xyz[-1:], zeros), dim=-2) # [B,T,L,27,3]
-    t2d, mask_t_2d_remade = util.get_t2d(
-        xyz_t[0], indep.is_sm, rfi.atom_frames[0])
+    zeros = torch.zeros(B,1,L,36-3,3).float().to(rfi.xyz.device) # zeros for sidechains 
+    # cat BB prediction with sidechain zeros 
+    xyz_t = torch.cat((rfo.xyz[-1:], zeros), dim=-2) # [B,T,L,36,3] 
+
+    t2d, mask_t_2d_remade = util.get_t2d(xyz_t[0], indep.is_sm, rfi.atom_frames[0])
+    
     t2d = t2d[None] # Add batch dimension # [B,T,L,L,44]
     rfi_sc.xyz_t = xyz_t[:,:,:,1]
     rfi_sc.t2d = t2d

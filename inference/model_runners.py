@@ -154,7 +154,8 @@ class Sampler:
 
 
         self.allatom = ComputeAllAtomCoords().to(self.device)
-        self.target_feats = iu.process_target(self.inf_conf.input_pdb, parse_hetatom=False, center=False)
+        
+        self.target_feats = iu.process_target(self.inf_conf.input_pdb, parse_hetatom=False, center=False, inf_conf=self.inf_conf)
         self.chain_idx = None
 
         if self.diffuser_conf.partial_T:
@@ -357,6 +358,12 @@ class Sampler:
 
         indep = self.model_adaptor.make_indep(self._conf.inference.input_pdb, self._conf.inference.ligand)
 
+        # check for subsymm template and add to indep if present
+        if self.inf_conf.subsymm_template:
+            indep.subsymm_seq        = self.target_feats['subsymm_seq'].to(self.device)
+            indep.subsymm_xyz        = self.target_feats['subsymm_xyz'].to(self.device)
+            indep.mask_t_2d_subsymm  = self.target_feats['mask_2d_subsymm'].to(self.device)
+
         is_partial = self.diffuser_conf.partial_T is not None
         indep, is_diffused = self.model_adaptor.insert_contig(indep, self.contig_map, partial_T=is_partial) 
         
@@ -380,7 +387,12 @@ class Sampler:
         # tmp_outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/inputs/tmp/'
         # fp1 = os.path.join(tmp_outdir, 'indep_crds_before_diffusion.pdb')
         # util.writepdb(fp1, indep.xyz[:,:14,:], indep.seq)
-    
+
+        # alter the diffusion mask to diffuse everything if we have a symm_template 
+        if self.inf_conf.subsymm_template is not None:
+            print('Detected symmetric template - diffusing all atoms')
+            is_diffused = torch.ones_like(is_diffused)
+            self.is_diffused = is_diffused
 
         atom_mask = None
         seq_one_hot = None
@@ -485,6 +497,8 @@ class Sampler:
             # util.writepdb(fp2, indep.xyz[:,:14,:], indep.seq)
 
             # sys.exit('Exiting early') 
+            
+            # this is the step that duplicates starting coordinates 
             indep, symmsub  = symmetry.find_minimal_neighbors(indep, symmRs, symmeta)
 
             
@@ -514,8 +528,6 @@ class Sampler:
 
             indep = symmetry.propogate_repeat_features(indep, Lasu)
             self.denoiser.decode_scheduler.visible[indep.is_sm] = True # all sm are visible/not diffused
-
-
 
 
         
@@ -891,16 +903,74 @@ class NRBStyleSelfCond(Sampler):
         ##################################
         self_cond = False
         if ((t < self.diffuser.T) and (t != self.diffuser_conf.partial_T)) and self._conf.inference.str_self_cond:
+            # in the middle of the traj, so self condition on previous px0
             self_cond=True
             rfi = aa_model.self_cond(indep, rfi, rfo)
 
+        # Check for subsymmetric template
+        # if exists, slice in the t2d from subsym template 
+        if self.inf_conf.subsymm_template is not None:
+            mask_t_2d_subsymm = indep.mask_t_2d_subsymm
+            xyz_subsymm = indep.subsymm_xyz
+
+            mask_t = torch.ones_like(mask_t_2d_subsymm).bool() # this mask is for coordinates that don't exist
+
+            L = xyz_subsymm.shape[0]
+            zeros = torch.zeros(1,L,9,3).to(self.device)
+            xyz_subsymm_full = torch.cat([xyz_subsymm[None],zeros], dim=2)
+            assert xyz_subsymm_full.shape == (1,L,36,3), f'Got shape: {xyz_subsymm_full.shape}'
+
+            is_sm = indep.is_sm
+            atom_frames = rfi.atom_frames[0]
+
+            t2d_subsymm, _ = util.get_t2d(xyz_subsymm_full,
+                                       is_sm, 
+                                       atom_frames)
+            
+            # now slice out relevant parts of t2d_subsymm and put into rfi.t2d
+            symmsub = self.symmsub 
+            # remap to modelled subunits
+            mask_t_2d_subsymm_applied = mask_t_2d_subsymm[:,symmsub[:,None],symmsub[None,:]]
+            mask_t_2d_subsymm_applied = mask_t_2d_subsymm_applied.repeat_interleave(self.Lasu,dim=1).repeat_interleave(self.Lasu,dim=2)
+
+            # make same shape as t2d tensors to apply in one fell swoop 
+            mask_t_applied = mask_t_2d_subsymm_applied.unsqueeze(-1).expand_as(rfi.t2d)
+
+            # Test mask: 
+            if False:
+                mask = torch.zeros(416,416)
+                LASU = 208
+                L_true = 100 
+
+                # top left 
+                mask[:L_true,:L_true] = 1
+                # bottom left 
+                mask[LASU:LASU+L_true,:L_true] = 1
+                # top right 
+                mask[:L_true,LASU:LASU+L_true] = 1
+                # bottom right
+                mask[LASU:LASU+L_true,LASU:LASU+L_true] = 1
+
+                mask = mask.bool()
+                mask_t_applied = mask[None,None,...,None].expand_as(rfi.t2d)
+
+            # replace the portion of t2d with the subsymmetric template
+            # outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/tmp/'
+            # torch.save(rfi.t2d, outdir + f't2d_before_partial_mask.pt')
+            rfi.t2d[mask_t_applied] = t2d_subsymm[None][mask_t_applied]
+            # torch.save(rfi.t2d, outdir + f't2d_after_partial_mask.pt')
+            # assert False 
+
+        
         if self.symmetry is not None:
             idx_pdb = rfi.idx
             idx_pdb, self.chain_idx = self.symmetry.res_idx_procesing(res_idx=idx_pdb)
 
+        # Model Forward
         with torch.no_grad():
             if self.recycle_schedule[t-1] > 1:
                 raise Exception('not implemented')
+            
             for rec in range(self.recycle_schedule[t-1]):
                 # This is the assertion we should be able to use, but the
                 # network's ComputeAllAtom requires even atoms to have N and C coords.                
@@ -913,7 +983,7 @@ class NRBStyleSelfCond(Sampler):
                                'symmRs' :self.symmRs,
                                'symmeta':self.symmeta,
                                'symmsub':self.symmsub}) # None by default - see self.sample_init()
-                kwargs.update({'t':t})
+                # kwargs.update({'t':t})
                 
                 if REPORT_MEM:
                     print('MEM REPORT LINE 916 model runners')
@@ -1004,7 +1074,8 @@ class NRBStyleSelfCond(Sampler):
             fake_indep.xyz = x_t_1.to(device=self.symmRs.device)
             _, symmsub  = symmetry.find_minimal_neighbors(fake_indep, self.symmRs, self.symmeta)
 
-            x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs, fit_symm=False).squeeze(0)
+            # x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs, fit_symm=False).squeeze(0)
+            x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs).squeeze(0)
 
         px0 = px0.cpu()
         x_t_1 = x_t_1.cpu()

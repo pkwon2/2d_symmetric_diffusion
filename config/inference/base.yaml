@@ -38,6 +38,8 @@ inference:
   internal_sym: null
   offset_scale: 1.0
   start_from_input: False
+  subsymm_template: null 
+
 
 contigmap:
   contigs: ['20', 'A3-23', '30']

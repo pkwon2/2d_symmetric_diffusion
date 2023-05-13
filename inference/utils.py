@@ -24,7 +24,10 @@ import string
 import hydra
 import rf2aa.chemical
 import aa_model
+import parsers
 
+
+from . import symmetry 
 ###########################################################
 #### Functions which can be called outside of Denoiser ####
 ###########################################################
@@ -915,10 +918,12 @@ def preprocess(seq, xyz_t, t, T, ppi_design, binderlen, target_res, device):
     alpha_t = alpha_t.to(device)
     return msa_masked, msa_full, seq[None], torch.squeeze(xyz_t, dim=0), idx, t1d, t2d, xyz_t, alpha_t
 
+
 def parse_pdb(filename, **kwargs):
     '''extract xyz coords for all heavy atoms'''
     lines = open(filename,'r').readlines()
     return parse_pdb_lines(lines, **kwargs)
+
 
 def parse_pdb_lines(lines, parse_hetatom=False, ignore_het_h=True):
     # indices of residues observed in the structure
@@ -1052,9 +1057,25 @@ def parse_a3m(filename):
 
     return msa,ins
 
+def symm2nchain(S):
+    """Get number of chains in a symmetry group."""
+    if S == 'O':
+        return 24 
+    elif S == 'I':
+        return 60
+    elif S.startswith('D'):
+        return 2*int(S[1:])
+    elif S.startswith('T'):
+        return 12 
+    elif S.startswith('C'):
+        return int(S[1:])
 
+def process_target(pdb_path, parse_hetatom=False, center=True, inf_conf=None):
+    """
+    Generally parse target pdb file and return a dictionary of features.
 
-def process_target(pdb_path, parse_hetatom=False, center=True):
+    Handles case where we want to template symmetric proteins into supersymms (e.g., c4 into O, C3 into I)
+    """
 
     # Read target pdb and extract features.
     target_struct = parse_pdb(pdb_path, parse_hetatom=parse_hetatom)
@@ -1063,10 +1084,11 @@ def process_target(pdb_path, parse_hetatom=False, center=True):
     ca_center = target_struct['xyz'][:, :1, :].mean(axis=0, keepdims=True)
     if not center:
         ca_center = 0
-    xyz = torch.from_numpy(target_struct['xyz'] - ca_center)
-    seq_orig = torch.from_numpy(target_struct['seq'])
+
+    xyz       = torch.from_numpy(target_struct['xyz'] - ca_center)
+    seq_orig  = torch.from_numpy(target_struct['seq'])
     atom_mask = torch.from_numpy(target_struct['mask'])
-    seq_len = len(xyz)
+    seq_len   = len(xyz)
 
     # Make 27 atom representation
     xyz_27 = torch.full((seq_len, 27, 3), np.nan).float()
@@ -1083,6 +1105,87 @@ def process_target(pdb_path, parse_hetatom=False, center=True):
     if parse_hetatom:
         out['xyz_het'] = target_struct['xyz_het']
         out['info_het'] = target_struct['info_het']
+
+    # symmetric template parsing - extract subsymmetry info 
+    if inf_conf.subsymm_template is not None:
+        # Need to rely on the template pdb for number of chains et. al. 
+        tmp_parsed = parse_pdb(inf_conf.subsymm_template, parse_hetatom=False)
+        seq_len = len(tmp_parsed['xyz'])
+
+        nchains = len( set(i[0] for i in tmp_parsed['pdb_idx']) )
+        Lasu = seq_len // nchains 
+        assert seq_len % nchains == 0, "Sequence length must be divisible by number of chains in template."
+        Ls = [Lasu] * nchains
+        
+        # dummy sym metadata 
+        symmids, symmRs, symmeta, symmoffset = symmetry.get_pointsym_meta(inf_conf.internal_sym)
+
+        # parse and reshape the symmetric template pdb 
+        xyz_t, mask_t, t1d_t, seq_t = parsers.read_multichain_template_pdb(Ls, inf_conf.subsymm_template)
+        xyz_t = xyz_t.reshape(1,len(Ls),-1,27,3).squeeze() 
+        mask_t = mask_t.reshape(1,len(Ls),-1,27).squeeze()
+        t1d_t = t1d_t.reshape(1,len(Ls),-1,22).squeeze()
+
+        seq_t = torch.argmax(seq_t, dim=-1).reshape(1,len(Ls),-1).squeeze()
+
+
+        # one vs all for kabsch --> return axes of symmetry 
+        xyz_int = torch.cat( (xyz_t[0:1].repeat(nchains-1,1,1,1), xyz_t[1:]), dim=1)
+        mask_int = torch.cat( (mask_t[0:1].repeat(nchains-1,1,1), mask_t[1:]), dim=1)
+        
+
+        symmgp, subsymm, symmaxes = symmetry.get_symmetry(xyz_int, mask_int)
+        print('Detected template symmetry group: ',symmgp)
+        
+        # assert this, means len symmaxes will be 1 - [(nfold, axis, point, i)]
+        assert 'c' in symmgp.lower(), "Template must be C-symmetric for now."
+        (nfold, axis, point, _) = symmaxes[0]
+        angle = 360.0 / nfold
+        angle = angle * np.pi / 180.0 
+
+        # make stack of rotations that reconstruct the template from ASU 
+        rs = [] 
+        for i in range(nfold):
+            theta = angle * i
+            r = symmetry.matrix_from_rotation(theta, axis)
+            rs.append(r)
+        rs = torch.stack(rs, dim=0)
+
+
+
+
+        # map that subsymmetry against the sym of simulation
+        mask_t = mask_t[0:1]
+        xyz_t = xyz_t[0:1,:Lasu]
+        
+        xyz_t, mask_t_2d_subsymm, axis = symmetry.find_subsymmetry(xyz_t, symmgp, symmaxes, symmRs)
+
+
+        out['mask_2d_subsymm'] = mask_t_2d_subsymm
+        out['axis'] = axis
+
+        # full length template coordinates and sequence 
+        s = rs.shape[0]
+        b,l,a,i = xyz_t.shape
+        rxyz = torch.einsum('sji,blai->bslaj',rs.transpose(-1,-2), xyz_t).squeeze() # (s,l,a,i) 
+        rxyz = rxyz.reshape(l*s,a,i) # (l*s,a,i)
+        
+        # keeping these for use as template 
+        out['subsymm_xyz'] = rxyz
+        out['subsymm_seq'] = seq_t.reshape(-1) 
+
+        # test reconstruction
+        # outfolder = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/' 
+        # outname = os.path.join(outfolder, 'test_symm_template_reconstruction.pdb')
+        # ic(out['template_symm_seq'].shape)
+        # ic(out['template_symm_xyz'].shape)
+        # ic(util.__file__)
+        # util.writepdb(outname, 
+        #               out['template_symm_xyz'].squeeze()[:,:3,:],
+        #               out['template_symm_seq'].squeeze())
+
+
+        # sys.exit('debugging exit')
     return out
     
 

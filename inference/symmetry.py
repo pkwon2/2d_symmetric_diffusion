@@ -468,25 +468,70 @@ def get_symm_map(subs,O):
     return symmmask
 
 
-def rotation_from_matrix(R, eps=1e-6):
-    w, W = torch.linalg.eig(R.T)
-    i = torch.where(abs(torch.real(w) - 1.0) < eps)[0]
-    if (len(i)==0):
-        i = torch.tensor(0)
-        print (torch.real(w))
-        print (torch.real(R.T))
-    axis = torch.real(W[:, i[-1]]).squeeze()
+# def rotation_from_matrix(R, eps=1e-5):
+#     w, W = torch.linalg.eig(R.T)
 
-    cosa = (torch.trace(R) - 1.0) / 2.0
-    if abs(axis[2]) > eps:
-        sina = (R[1, 0] + (cosa-1.0)*axis[0]*axis[1]) / axis[2]
-    elif abs(axis[1]) > eps:
-        sina = (R[0, 2] + (cosa-1.0)*axis[0]*axis[2]) / axis[1]
-    else:
-        sina = (R[2, 1] + (cosa-1.0)*axis[1]*axis[2]) / axis[0]
+#     i = torch.where(abs(torch.real(w) - 1.0) < eps)[0]
+    
+#     if (len(i)==0):
+#         print('This is R ', R)
+#         i = torch.tensor(0)
+#         print (torch.real(w))
+#         print (torch.real(R.T))
+        
+#     axis = torch.real(W[:, i[-1]]).squeeze()
+
+#     cosa = (torch.trace(R) - 1.0) / 2.0
+#     if abs(axis[2]) > eps:
+#         sina = (R[1, 0] + (cosa-1.0)*axis[0]*axis[1]) / axis[2]
+#     elif abs(axis[1]) > eps:
+#         sina = (R[0, 2] + (cosa-1.0)*axis[0]*axis[2]) / axis[1]
+#     else:
+#         sina = (R[2, 1] + (cosa-1.0)*axis[1]*axis[2]) / axis[0]
+#     angle = torch.atan2(sina, cosa)
+
+#     return angle, axis
+
+# convert a (...,3,3) rot matrix stack to axis (...,3) and angle (...) of rotation
+def rotation_from_matrix(R, eps=1e-4):
+    Rorig = R.shape
+    R = R.reshape(-1,3,3)
+    w, W = torch.linalg.eig(R.transpose(-1,-2))
+    i = torch.argmax(torch.real(w), dim=-1)
+    axis = torch.gather(torch.real(W), -1, i[:,None,None].repeat(1,3,1)).squeeze(-1)
+    
+    tr = (torch.eye(3)*R).sum(dim=(-1,-2))
+    cosa = (tr - 1.0) / 2.0
+    sina = torch.zeros_like(cosa)
+    mask1 = abs(axis[:,2]) > eps
+    sina[mask1] = (R[mask1,1, 0] + (cosa[mask1]-1.0)*axis[mask1,0]*axis[mask1,1]) / axis[mask1,2]
+    mask2 = ~mask1 * (abs(axis[:,1]) > eps)
+    sina[mask2] = (R[mask2,0, 2] + (cosa[mask2]-1.0)*axis[mask2,0]*axis[mask2,2]) / axis[mask2,1]
+    mask3 = ~(mask1+mask2)
+    sina[mask3] = (R[mask3,2, 1] + (cosa[mask3]-1.0)*axis[mask3,1]*axis[mask3,2]) / axis[mask3,0]
     angle = torch.atan2(sina, cosa)
-
+    angle = angle.reshape(Rorig[:-2])
+    axis = axis.reshape((*Rorig[:-2],3))
     return angle, axis
+
+# convert axis/angle to rotation matrix
+def matrix_from_rotation(angle, axis):
+    c,s = np.cos(angle), np.sin(angle)
+    t = 1-c
+
+    R = torch.zeros((3,3), device = axis.device)
+    R[0,0] = c + axis[0]*axis[0]*t
+    R[1,1] = c + axis[1]*axis[1]*t
+    R[2,2] = c + axis[2]*axis[2]*t
+    R[1,0] = axis[0]*axis[1]*t + axis[2]*s
+    R[0,1] = axis[0]*axis[1]*t - axis[2]*s
+    R[2,0] = axis[0]*axis[2]*t - axis[1]*s
+    R[0,2] = axis[0]*axis[2]*t + axis[1]*s
+    R[2,1] = axis[1]*axis[2]*t + axis[0]*s
+    R[1,2] = axis[1]*axis[2]*t - axis[0]*s
+
+    return R
+
 
 def kabsch(pred, true):
     def rmsd(V, W, eps=1e-6):
@@ -523,6 +568,124 @@ def get_angle(X,Y):
     return angle
 
 # given the coordinates of a subunit + 
+# def get_symmetry(xyz, mask, rms_cut=2.5, nfold_cut=0.1, angle_cut=0.05, trans_cut=2.0):
+#     nops = xyz.shape[0]
+#     L = xyz.shape[1]//2
+
+#     # PASS 1: find all symm axes
+#     symmaxes = []
+#     for i in range(nops):
+#         # if there are multiple biomt records, this may occur.
+#         # rather than try to rescue, we will take the 1st (typically author-assigned)
+#         offset0 = torch.linalg.norm(xyz[i,:L,1]-xyz[0,:L,1], dim=-1)
+#         if (torch.mean(offset0)>1e-4):
+#             continue
+
+#         # get alignment
+#         mask_i = mask[i,:L,1]*mask[i,L:,1]
+#         xyz_i = xyz[i,:L,1][mask_i,:]
+#         xyz_j = xyz[i,L:,1][mask_i,:]
+
+#         rms_ij, Uij, cI, cJ = kabsch(xyz_i, xyz_j)
+#         if (rms_ij > rms_cut):
+#             print (i,'rms',rms_ij)
+#             continue
+
+#         # get axis and point symmetry about axis
+#         angle, axis = rotation_from_matrix(Uij)
+#         nfold = 2*np.pi/torch.abs(angle)
+
+#         # a) ensure integer # of subunits per rotation
+#         if (torch.abs( nfold - torch.round(nfold) ) > nfold_cut ):
+#             #print ('nfold fail',nfold)
+#             continue
+
+#         nfold = torch.round(nfold).long()
+#         # b) ensure rotation only (no translation)
+#         delCOM = torch.mean(xyz_i, dim=-2) - torch.mean(xyz_j, dim=-2)
+#         trans_dot_symaxis = nfold * torch.abs(torch.dot(delCOM, axis))
+#         if (trans_dot_symaxis > trans_cut ):
+#             #print ('trans fail',trans_dot_symaxis)
+#             continue
+
+
+#         # 3) get a point on the symm axis from CoMs and angle 
+#         cIJ = torch.sign(angle) * (cJ-cI).squeeze(0)
+#         dIJ = torch.linalg.norm(cIJ)
+#         p_mid = (cI+cJ).squeeze(0) / 2
+#         u = cIJ / dIJ            # unit vector in plane of circle
+#         v = torch.cross(axis, u) # unit vector from sym axis to p_mid
+#         r = dIJ / (2*torch.sin(angle/2))
+#         d = torch.sqrt( r*r - dIJ*dIJ/4 ) # distance from mid-chord to center
+#         point = p_mid - (d)*v
+
+#         # check if redundant
+#         toadd = True
+#         for j,(nf_j,ax_j,pt_j,err_j) in enumerate(symmaxes):
+#             if (not intersect(pt_j,ax_j,point,axis)):
+#                 continue
+#             angle_j = get_angle(ax_j,axis)
+#             if (angle_j < angle_cut):
+#                 if (nf_j < nfold): # stored is a subsymmetry of complex, overwrite
+#                     symmaxes[j] = (nfold, axis, point, i)
+#                 toadd = False
+
+#         if (toadd):
+#             symmaxes.append( (nfold, axis, point, i) )
+
+#     # PASS 2: combine
+#     symmgroup = 'C1'
+#     subsymm = []
+#     if len(symmaxes)==1:
+#         symmgroup = 'C%d'%(symmaxes[0][0])
+#         subsymm = [symmaxes[0][3]]
+#     elif len(symmaxes)>1:
+#         symmaxes = sorted(symmaxes, key=lambda x: x[0], reverse=True)
+#         angle = get_angle(symmaxes[0][1],symmaxes[1][1])
+#         subsymm = [symmaxes[0][3],symmaxes[1][3]]
+
+#         # 2-fold and n-fold intersect at 90 degress => Dn
+#         if (symmaxes[1][0] == 2 and torch.abs(angle-np.pi/2) < angle_cut):
+#             symmgroup = 'D%d'%(symmaxes[0][0])
+#         else:
+#             # polyhedral rules:
+#             #   3-Fold + 2-fold intersecting at acos(-1/sqrt(3)) -> T
+#             angle_tgt = np.arccos(-1/np.sqrt(3))
+#             if (symmaxes[0][0] == 3 and symmaxes[1][0] == 2 and torch.abs(angle - angle_tgt) < angle_cut):
+#                 symmgroup = 'T'
+
+#             #   3-Fold + 2-fold intersecting at asin(1/sqrt(3)) -> O
+#             angle_tgt = np.arcsin(1/np.sqrt(3))
+#             if (symmaxes[0][0] == 3 and symmaxes[1][0] == 2 and torch.abs(angle - angle_tgt) < angle_cut):
+#                 symmgroup = 'O'
+
+#             #   4-Fold + 3-fold intersecting at acos(1/sqrt(3)) -> O
+#             angle_tgt = np.arccos(1/np.sqrt(3))
+#             if (symmaxes[0][0] == 4 and symmaxes[1][0] == 3 and torch.abs(angle - angle_tgt) < angle_cut):
+#                 symmgroup = 'O'
+
+#             #   3-Fold + 2-fold intersecting at 0.5*acos(sqrt(5)/3) -> I
+#             angle_tgt = 0.5*np.arccos(np.sqrt(5)/3)
+#             if (symmaxes[0][0] == 3 and symmaxes[1][0] == 2 and torch.abs(angle - angle_tgt) < angle_cut):
+#                 symmgroup = 'I'
+
+#             #   5-Fold + 2-fold intersecting at 0.5*acos(1/sqrt(5)) -> I
+#             angle_tgt = 0.5*np.arccos(1/np.sqrt(5))
+#             if (symmaxes[0][0] == 5 and symmaxes[1][0] == 2 and torch.abs(angle - angle_tgt) < angle_cut):
+#                 symmgroup = 'I'
+
+#             #   5-Fold + 3-fold intersecting at 0.5*acos((4*sqrt(5)-5)/15) -> I
+#             angle_tgt = 0.5*np.arccos((4*np.sqrt(5)-5)/15)
+#             if (symmaxes[0][0] == 5 and symmaxes[1][0] == 3 and torch.abs(angle - angle_tgt) < angle_cut):
+#                 symmgroup = 'I'
+#             else:
+#                 pass
+#                 #fd: we could use a single symmetry here instead.  
+#                 #    But these cases mostly are bad BIOUNIT annotations...
+#                 #print ('nomatch',angle, [(x,y) for x,_,_,y in symmaxes])
+
+#     return symmgroup, subsymm
+
 def get_symmetry(xyz, mask, rms_cut=2.5, nfold_cut=0.1, angle_cut=0.05, trans_cut=2.0):
     nops = xyz.shape[0]
     L = xyz.shape[1]//2
@@ -542,7 +705,7 @@ def get_symmetry(xyz, mask, rms_cut=2.5, nfold_cut=0.1, angle_cut=0.05, trans_cu
         xyz_j = xyz[i,L:,1][mask_i,:]
         rms_ij, Uij, cI, cJ = kabsch(xyz_i, xyz_j)
         if (rms_ij > rms_cut):
-            print (i,'rms',rms_ij)
+            #print (i,'rms',rms_ij)
             continue
 
         # get axis and point symmetry about axis
@@ -636,7 +799,7 @@ def get_symmetry(xyz, mask, rms_cut=2.5, nfold_cut=0.1, angle_cut=0.05, trans_cu
                 #    But these cases mostly are bad BIOUNIT annotations...
                 #print ('nomatch',angle, [(x,y) for x,_,_,y in symmaxes])
 
-    return symmgroup, subsymm
+    return symmgroup, subsymm, symmaxes
         
 # used to be called symm_subunit_matrix
 def get_pointsym_meta(symmid):
@@ -1149,6 +1312,57 @@ def get_pointsym_meta(symmid):
         assert False
 
     return symmatrix, Rs,metasymm, offset
+
+# find a particular subsymmetry within a larger symmetry
+def find_subsymmetry( xyz_t, symmgp, symmaxes, symmRs, eps=1e-6 ):
+    N,L = xyz_t.shape[:2]
+    S = symmRs.shape[0]
+
+    # only C subsymms for now...
+    if (len(symmaxes)!=1):
+        print ("Unsupported symmetry in find_subsymmetry:", symmgp)
+
+    nfold = symmaxes[0][0]
+
+    print('About to get rotation from matrix')
+    print(symmRs[1:].shape)
+    ang_i, ax_i = rotation_from_matrix(symmRs[1:]) # 1st xform is identity, skip
+
+    # a) find 'nfold' subunits with the same axis and rotations of [0...nfold-1]*2*pi/nfold
+    nfold_i = (ang_i*nfold/(2*np.pi))
+    cand1 = (torch.abs(nfold_i-torch.round(nfold_i)) < eps).nonzero()[0,0]
+    similars = (torch.linalg.norm(ax_i - ax_i[cand1], dim=-1) < eps).nonzero()[:,0] + 1 # +1 since we skipped 1st
+
+    assert (similars.shape[0] == nfold-1)
+    ax_i = ax_i[cand1]
+
+    # b) rotate / translate symmaxes to ax_i
+    tgt_axis, tgt_origin = symmaxes[0][1], symmaxes[0][2]
+    # R_1: first rotate axes to be coincident
+    # R_2: random rotation about symm axis
+    #   inside/outside "flips" are handled in offset code
+    dotprod = torch.sum(tgt_axis*ax_i)
+    if ( torch.abs( dotprod ) > 1-eps):
+        R_1 = torch.eye(3, device=tgt_axis.device)
+    else:
+        axis_rot = torch.cross( tgt_axis, ax_i )
+        axis_rot = axis_rot / torch.linalg.norm(axis_rot)
+        angle_rot = torch.acos( dotprod )
+        R_1 = matrix_from_rotation( angle_rot, axis_rot )
+
+    angle_rot = np.random.rand()*2*np.pi
+    R_2 = matrix_from_rotation( angle_rot, tgt_axis )
+
+    R_12 = R_1 @ R_2
+    xyz = torch.einsum('ij,braj->brai', R_12, xyz_t-tgt_origin)
+
+    # c) make res-pair mask
+    mask_t = torch.zeros((1,S,S), dtype=torch.bool, device=tgt_axis.device)
+    mask_t[0,0,0] = True
+    mask_t[0,0,similars] = True
+    mask_t[0,similars,0] = True
+    mask_t[0,similars[:,None],similars[None,:]] = True
+    return xyz, mask_t, ax_i
 
 def propogate_repeat_features(indep, Lasu):
     """
