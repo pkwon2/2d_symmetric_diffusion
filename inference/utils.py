@@ -1116,6 +1116,7 @@ def process_target(pdb_path, parse_hetatom=False, center=True, inf_conf=None):
         Lasu = seq_len // nchains 
         assert seq_len % nchains == 0, "Sequence length must be divisible by number of chains in template."
         Ls = [Lasu] * nchains
+        ic(Ls)
         
         # dummy sym metadata 
         symmids, symmRs, symmeta, symmoffset = symmetry.get_pointsym_meta(inf_conf.internal_sym)
@@ -1128,51 +1129,60 @@ def process_target(pdb_path, parse_hetatom=False, center=True, inf_conf=None):
 
         seq_t = torch.argmax(seq_t, dim=-1).reshape(1,len(Ls),-1).squeeze()
 
+        if inf_conf.internal_sym.lower() != 'c1':
+            # one vs all for kabsch --> return axes of symmetry 
+            xyz_int = torch.cat( (xyz_t[0:1].repeat(nchains-1,1,1,1), xyz_t[1:]), dim=1)
+            mask_int = torch.cat( (mask_t[0:1].repeat(nchains-1,1,1), mask_t[1:]), dim=1)
+            
 
-        # one vs all for kabsch --> return axes of symmetry 
-        xyz_int = torch.cat( (xyz_t[0:1].repeat(nchains-1,1,1,1), xyz_t[1:]), dim=1)
-        mask_int = torch.cat( (mask_t[0:1].repeat(nchains-1,1,1), mask_t[1:]), dim=1)
-        
+            symmgp, subsymm, symmaxes = symmetry.get_symmetry(xyz_int, mask_int)
+            print('Detected template symmetry group: ',symmgp)
 
-        symmgp, subsymm, symmaxes = symmetry.get_symmetry(xyz_int, mask_int)
-        print('Detected template symmetry group: ',symmgp)
-        
-        # assert this, means len symmaxes will be 1 - [(nfold, axis, point, i)]
-        assert 'c' in symmgp.lower(), "Template must be C-symmetric for now."
-        (nfold, axis, point, _) = symmaxes[0]
-        angle = 360.0 / nfold
-        angle = angle * np.pi / 180.0 
+            
+            # assert this, means len symmaxes will be 1 - [(nfold, axis, point, i)]
+            assert 'c' in symmgp.lower(), "Template must be C-symmetric for now."
+            (nfold, axis, point, _) = symmaxes[0]
+            angle = 360.0 / nfold
+            angle = angle * np.pi / 180.0 
 
-        # make stack of rotations that reconstruct the template from ASU 
-        rs = [] 
-        for i in range(nfold):
-            theta = angle * i
-            r = symmetry.matrix_from_rotation(theta, axis)
-            rs.append(r)
-        rs = torch.stack(rs, dim=0)
-
-
-
-
-        # map that subsymmetry against the sym of simulation
-        mask_t = mask_t[0:1]
-        xyz_t = xyz_t[0:1,:Lasu]
-        
-        xyz_t, mask_t_2d_subsymm, axis = symmetry.find_subsymmetry(xyz_t, symmgp, symmaxes, symmRs)
+            # make stack of rotations that reconstruct the template from ASU 
+            rs = [] 
+            for i in range(nfold):
+                theta = angle * i
+                r = symmetry.matrix_from_rotation(theta, axis)
+                rs.append(r)
+            rs = torch.stack(rs, dim=0)
 
 
-        out['mask_2d_subsymm'] = mask_t_2d_subsymm
-        out['axis'] = axis
+            # map that subsymmetry against the sym of simulation
+            mask_t = mask_t[0:1]
+            xyz_t = xyz_t[0:1,:Lasu]
+            
+            xyz_t, mask_t_2d_subsymm, axis = symmetry.find_subsymmetry(xyz_t, symmgp, symmaxes, symmRs)
 
-        # full length template coordinates and sequence 
-        s = rs.shape[0]
-        b,l,a,i = xyz_t.shape
-        rxyz = torch.einsum('sji,blai->bslaj',rs.transpose(-1,-2), xyz_t).squeeze() # (s,l,a,i) 
-        rxyz = rxyz.reshape(l*s,a,i) # (l*s,a,i)
-        
-        # keeping these for use as template 
-        out['subsymm_xyz'] = rxyz
-        out['subsymm_seq'] = seq_t.reshape(-1) 
+            ic(mask_t_2d_subsymm.shape)
+            ic(mask_t_2d_subsymm)
+            out['mask_2d_subsymm'] = mask_t_2d_subsymm
+            out['axis'] = axis
+
+            # full length template coordinates and sequence 
+            s = rs.shape[0]
+            b,l,a,i = xyz_t.shape
+            rxyz = torch.einsum('sji,blai->bslaj',rs.transpose(-1,-2), xyz_t).squeeze() # (s,l,a,i) 
+            rxyz = rxyz.reshape(l*s,a,i) # (l*s,a,i)
+            
+            # keeping these for use as template 
+            out['subsymm_xyz'] = rxyz
+            out['subsymm_seq'] = seq_t.reshape(-1) 
+
+
+        else: # C1 symmetric template
+            out['mask_2d_subsymm'] = torch.ones(1,1,1).bool()
+            out['axis'] = None 
+            out['subsymm_xyz'] = xyz_t
+            out['subsymm_seq'] = seq_t.reshape(-1)
+
+
 
         # test reconstruction
         # outfolder = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/' 

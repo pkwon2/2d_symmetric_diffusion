@@ -5,6 +5,7 @@ import numpy as np
 from omegaconf import DictConfig, OmegaConf
 import data_loader
 from icecream import ic
+import pickle 
 
 import rf2aa.chemical
 from rf2aa.chemical import NAATOKENS, MASKINDEX, NTOTAL, NHEAVYPROT
@@ -393,6 +394,8 @@ class Sampler:
             print('Detected symmetric template - diffusing all atoms')
             is_diffused = torch.ones_like(is_diffused)
             self.is_diffused = is_diffused
+            # need to reset according to new is diffused mask 
+            indep.seq[self.is_diffused] = 21 # set any residues allowed to diffuse to masked
 
         atom_mask = None
         seq_one_hot = None
@@ -887,7 +890,7 @@ class NRBStyleSelfCond(Sampler):
         #     t  = getattr(indep, key)
         #     if isinstance(t, torch.Tensor):
         #         print(key)
-        #         ic(t.shape)
+        #         ic(t.shape) 
 
         rfi = self.model_adaptor.prepro(indep, t, self.is_diffused)
 
@@ -937,28 +940,28 @@ class NRBStyleSelfCond(Sampler):
             mask_t_applied = mask_t_2d_subsymm_applied.unsqueeze(-1).expand_as(rfi.t2d)
 
             # Test mask: 
-            if False:
+            if True: # ONLY FOR TESTING
                 mask = torch.zeros(416,416)
                 LASU = 208
-                L_true = 100 
+                L_true = 208
 
                 # top left 
                 mask[:L_true,:L_true] = 1
                 # bottom left 
-                mask[LASU:LASU+L_true,:L_true] = 1
+                # mask[LASU:LASU+L_true,:L_true] = 1
                 # top right 
-                mask[:L_true,LASU:LASU+L_true] = 1
+                # mask[:L_true,LASU:LASU+L_true] = 1
                 # bottom right
-                mask[LASU:LASU+L_true,LASU:LASU+L_true] = 1
+                # mask[LASU:LASU+L_true,LASU:LASU+L_true] = 1
 
                 mask = mask.bool()
                 mask_t_applied = mask[None,None,...,None].expand_as(rfi.t2d)
 
             # replace the portion of t2d with the subsymmetric template
             # outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/tmp/'
-            # torch.save(rfi.t2d, outdir + f't2d_before_partial_mask.pt')
+            # torch.save(rfi.t2d, outdir + f'C1noslice_t2d_before_partial_mask_Lvisible_{L_true}.pt')
             rfi.t2d[mask_t_applied] = t2d_subsymm[None][mask_t_applied]
-            # torch.save(rfi.t2d, outdir + f't2d_after_partial_mask.pt')
+            # torch.save(rfi.t2d, outdir + f'C1noslice_t2d_after_partial_mask_Lvisible_{L_true}.pt')
             # assert False 
 
         
@@ -989,6 +992,19 @@ class NRBStyleSelfCond(Sampler):
                     print('MEM REPORT LINE 916 model runners')
                     mem_report() 
                     print('*'*50+'\n\n')
+
+                # if t == 50:
+                #     indep_outf = './tmp/RFI_t50_symm_fixseq_L416.pkl'
+                #     # save it 
+                #     with open(indep_outf, 'wb') as f:
+                #         pickle.dump(rfi, f)
+                        
+                # elif t == 45:
+                #     indep_outf = './tmp/RFI_t45_symm_fixseq_L416.pkl'
+                #     # save it
+                #     with open(indep_outf, 'wb') as f:
+                #         pickle.dump(rfi, f)
+                #         assert False 
 
                 rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)
                 print('********* SUCCESSFULL MODEL FORWARD *******')
