@@ -24,6 +24,7 @@ import networkx as nx
 import itertools
 import random
 from typing import Optional 
+from rf2aa.util_module import XYZConverter
 
 
 NINDEL=1
@@ -96,6 +97,7 @@ class RFI:
     sctors: torch.Tensor
     idx: torch.Tensor
     bond_feats: torch.Tensor
+    dist_matrix: torch.Tensor
     chirals: torch.Tensor
     atom_frames: torch.Tensor
     t1d: torch.Tensor
@@ -115,6 +117,7 @@ class RFO:
     logits_aa: torch.Tensor   # [1, 80, 115]
     logits_pae: torch.Tensor  # [1, 64, L, L]
     logits_pde: torch.Tensor  # [1, 64, L, L]
+    p_bind: torch.Tensor      # 
     xyz: torch.Tensor         # [40, 1, L, 3, 3]
     alpha_s: torch.Tensor     # [40, 1, L, 20, 2]
     xyz_allatom: torch.Tensor # [1, L, 36, 3]
@@ -170,6 +173,7 @@ class Model:
     def __init__(self, conf):
         self.conf = conf
         self.NTOKENS = rf2aa.chemical.NAATOKENS
+        self.converter = XYZConverter()
 
     def forward(self, rfi, **kwargs):
         # ipdb.set_trace()
@@ -503,8 +507,8 @@ class Model:
         # get torsion angles from templates
         seq_tmp = t1d[...,:-1].argmax(dim=-1).reshape(-1,L)
 
-        alpha, _, alpha_mask, _ = rf2aa.util.get_torsions(xyz_t.reshape(-1,L,rf2aa.chemical.NTOTAL,3), seq_tmp,
-            rf2aa.util.torsion_indices, rf2aa.util.torsion_can_flip, rf2aa.util.reference_angles)
+        alpha, _, alpha_mask, _ = self.converter.get_torsions(xyz_t.reshape(-1,L,rf2aa.chemical.NTOTAL,3), seq_tmp)
+            # rf2aa.util.torsion_indices, rf2aa.util.torsion_can_flip, rf2aa.util.reference_angles)
         alpha_mask = torch.logical_and(alpha_mask, ~torch.isnan(alpha[...,0]))
         alpha[torch.isnan(alpha)] = 0.0
         alpha = alpha.reshape(-1,L,rf2aa.chemical.NTOTALDOFS,2)
@@ -512,6 +516,7 @@ class Model:
         alpha_t = torch.cat((alpha, alpha_mask), dim=-1).reshape(-1, L, 3*rf2aa.chemical.NTOTALDOFS) # [n,L,30]
 
         alpha_t = alpha_t.unsqueeze(1) # [n,I,L,30]
+        alpha_t = alpha_t.tile((1,2,1,1)) # add dim for second template 
 
 
 
@@ -546,14 +551,19 @@ class Model:
             t1d=torch.cat((t1d, hotspot_tens[None,None,...,None].to(self.device)), dim=-1)
         
         # return msa_masked, msa_full, seq[None], torch.squeeze(xyz_t, dim=0), idx, t1d, t2d, xyz_t, alpha_t
-        mask_t = torch.ones(1,1,L,L).bool()
+        mask_t = torch.ones(1,2,L,L).bool() # 2 for second template
         sctors = torch.zeros((1,L,rf2aa.chemical.NTOTALDOFS,2))
 
         xyz = torch.squeeze(xyz_t, dim=0)
 
         # NO SELF COND
-        xyz_t = torch.zeros(1,1,L,3)
-        t2d   = torch.zeros(1,1,L,L,68)
+        xyz_t = torch.zeros(1,2,L,3)
+        t2d   = torch.zeros(1,2,L,L,68)
+
+        t2d_xt, mask_t_2d_remade = util.get_t2d(
+            xyz, indep.is_sm, indep.atom_frames)
+        t2d[0,0]   = t2d_xt[0]
+        xyz_t[0,0] = xyz[0,:,1]
 
         # ic(
         #     xyz[0, is_diffused][0][:,0], # nan 3:
@@ -576,9 +586,19 @@ class Model:
         xyz[0, is_diffused*~indep.is_sm,3:] = torch.nan
         xyz[0, indep.is_sm,14:] = 0
         xyz[0, is_protein_motif, 14:] = 0
+        dist_matrix = rf2aa.data_loader.get_bond_distances(indep.bond_feats)
 
-        ic(xyz.shape)
-        ic(xyz_t.shape)
+        # minor tweaks to rfi to match gp training
+        if ('inference' in self.conf) and (self.conf.inference.get('contig_as_guidepost', False)):
+            '''Manually inspecting the pickled features passed to RF during training, 
+            I did not see markers for the N and C termini. This is to more accurately 
+            replicate the features seen during training at inference.'''
+            # Erase N/C termini markers
+            msa_masked[...,-2:] = 0
+            msa_full[...,-2:] = 0
+
+        t1d = torch.tile(t1d, (1,2,1,1)) # add dim for second template
+        t1d[0,1,:,-1] = -1
 
         # Note: should be batched
         rfi = RFI(
@@ -590,6 +610,7 @@ class Model:
             sctors,
             indep.idx[None],
             indep.bond_feats[None],
+            dist_matrix[None],
             indep.chirals[None],
             indep.atom_frames[None],
             t1d,
@@ -836,8 +857,11 @@ def self_cond(indep, rfi, rfo):
     t2d, mask_t_2d_remade = util.get_t2d(xyz_t[0], indep.is_sm, rfi.atom_frames[0])
     
     t2d = t2d[None] # Add batch dimension # [B,T,L,L,44]
-    rfi_sc.xyz_t = xyz_t[:,:,:,1]
-    rfi_sc.t2d = t2d
+
+    # Insert the previous px0 into the SECOND template spot (index 1)
+    # This spot has -1 confidence in t1d, marking it as SC template
+    rfi_sc.xyz_t[0,1] = xyz_t[0,0,:,1]
+    rfi_sc.t2d[0,1] = t2d[0,0]
     return rfi_sc
 
 

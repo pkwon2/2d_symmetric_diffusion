@@ -11,7 +11,8 @@ import rf2aa.chemical
 from rf2aa.chemical import NAATOKENS, MASKINDEX, NTOTAL, NHEAVYPROT
 import rf2aa.util
 import rf2aa.data_loader
-from rf2aa.util_module import ComputeAllAtomCoords
+# from rf2aa.util_module import ComputeAllAtomCoords
+from rf2aa.util_module import XYZConverter
 from rf2aa.RoseTTAFoldModel import RoseTTAFoldModule
 from rf2aa.kinematics import xyz_to_c6d, c6d_to_bins, xyz_to_t2d, get_chirals
 import rf2aa.parsers
@@ -154,7 +155,8 @@ class Sampler:
             self.symmetry = None
 
 
-        self.allatom = ComputeAllAtomCoords().to(self.device)
+        # self.allatom = ComputeAllAtomCoords().to(self.device)
+        self.converter = XYZConverter() 
         
         self.target_feats = iu.process_target(self.inf_conf.input_pdb, parse_hetatom=False, center=False, inf_conf=self.inf_conf)
         self.chain_idx = None
@@ -392,10 +394,18 @@ class Sampler:
         # alter the diffusion mask to diffuse everything if we have a symm_template 
         if self.inf_conf.subsymm_template is not None:
             print('Detected symmetric template - diffusing all atoms')
+
+            old_is_diffused = is_diffused.clone() # save old mask 
+
             is_diffused = torch.ones_like(is_diffused)
             self.is_diffused = is_diffused
             # need to reset according to new is diffused mask 
             indep.seq[self.is_diffused] = 21 # set any residues allowed to diffuse to masked
+
+            # create tensor denoting which residues should have perfect confidence
+            # even though they may technically be diffused (moving)
+            has_imperfect_t1d = old_is_diffused.clone()
+            self.has_imperfect_t1d = has_imperfect_t1d
 
         atom_mask = None
         seq_one_hot = None
@@ -861,7 +871,7 @@ class Sampler:
         """
         Method for symmetrising px0 output, either for recycling or for self-conditioning
         """
-        _,px0_aa = self.allatom(torch.argmax(seq_in, dim=-1), px0, alpha)
+        _,px0_aa = self.converter.compute_all_atom(torch.argmax(seq_in, dim=-1), px0, alpha)
         px0_sym,_ = self.symmetry.apply_symmetry(px0_aa.to('cpu').squeeze()[:,:14], torch.argmax(seq_in, dim=-1).squeeze().to('cpu'))
         px0_sym = px0_sym[None].to(self.device)
         return px0_sym
@@ -892,7 +902,14 @@ class NRBStyleSelfCond(Sampler):
         #         print(key)
         #         ic(t.shape) 
 
-        rfi = self.model_adaptor.prepro(indep, t, self.is_diffused)
+        if not self.inf_conf.subsymm_t1d_perfect: 
+            # all AA that are diffused (according to contigs) have intermediate confidences
+            # even if they are templated in T2D 
+            rfi = self.model_adaptor.prepro(indep, t, self.is_diffused)
+        else:
+            # Though they are diffused, the AA being templated in T2d will have 
+            # perfect confidence, while all else has 1-t/T
+            rfi = self.model_adaptor.prepro(indep, t, self.has_imperfect_t1d)
 
         rf2aa.tensor_util.to_device(rfi, self.device)
         seq_init = torch.nn.functional.one_hot(indep.seq, num_classes=rf2aa.chemical.NAATOKENS).to(self.device).float()
@@ -908,7 +925,17 @@ class NRBStyleSelfCond(Sampler):
         if ((t < self.diffuser.T) and (t != self.diffuser_conf.partial_T)) and self._conf.inference.str_self_cond:
             # in the middle of the traj, so self condition on previous px0
             self_cond=True
+
             rfi = aa_model.self_cond(indep, rfi, rfo)
+            """
+            2template self conditioning: 
+
+            First template (zeroth index in t2d, t1d, xyz_t): 
+                Associated with xt, i.e., the current coordinates of the trajectory 
+
+            Second template (first index in t2d, t1d, xyz_t):
+                Associated with px0 from previous step, i.e., self conditioning
+            """
 
         # Check for subsymmetric template
         # if exists, slice in the t2d from subsym template 
@@ -943,24 +970,45 @@ class NRBStyleSelfCond(Sampler):
             if True: # ONLY FOR TESTING
                 mask = torch.zeros(416,416)
                 LASU = 208
-                L_true = 208
+                L_true = 100
 
                 # top left 
                 mask[:L_true,:L_true] = 1
                 # bottom left 
-                # mask[LASU:LASU+L_true,:L_true] = 1
+                mask[LASU:LASU+L_true,:L_true] = 1
                 # top right 
-                # mask[:L_true,LASU:LASU+L_true] = 1
+                mask[:L_true,LASU:LASU+L_true] = 1
                 # bottom right
-                # mask[LASU:LASU+L_true,LASU:LASU+L_true] = 1
+                mask[LASU:LASU+L_true,LASU:LASU+L_true] = 1
 
                 mask = mask.bool()
-                mask_t_applied = mask[None,None,...,None].expand_as(rfi.t2d)
+                if self.inf_conf.subsymm_template_xt_only:
+                    # Slicing subsymm template into only Xt T2D
+                    mask_t_applied1 = mask[...,None].expand_as(rfi.t2d[0,0])
+                    false_mask      = torch.zeros_like(mask_t_applied1).bool()
+
+                    # A mask which is True for Xt, False for self conditioned template
+                    # I.e., only apply subsymm template to Xt
+                    mask_t_applied2 = torch.stack([mask_t_applied1, false_mask], dim=0)[None]
+
+                    rfi.t2d[mask_t_applied2] = t2d_subsymm[mask_t_applied1[None]] 
+                else:
+                    # outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/experiments/052923_2template/disk_t2d/'
+                    # torch.save(rfi.t2d, outdir + f'C2_t2d_before_mask_Ltemplated_{L_true}.pt')
+
+
+                    # Sliceing subsymm template into both Xt and SC T2D's 
+                    mask_t_applied = mask[None,None,...,None].expand_as(rfi.t2d)
+                    rfi.t2d[mask_t_applied] = t2d_subsymm[None].repeat(1,2,1,1,1)[mask_t_applied] 
+
+                    # torch.save(rfi.t2d, outdir + f'C2_t2d_after_mask_Ltemplated_{L_true}.pt')
+
+                    # assert False 
 
             # replace the portion of t2d with the subsymmetric template
             # outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/tmp/'
             # torch.save(rfi.t2d, outdir + f'C1noslice_t2d_before_partial_mask_Lvisible_{L_true}.pt')
-            rfi.t2d[mask_t_applied] = t2d_subsymm[None][mask_t_applied]
+            # rfi.t2d[mask_t_applied] = t2d_subsymm[None][mask_t_applied]
             # torch.save(rfi.t2d, outdir + f'C1noslice_t2d_after_partial_mask_Lvisible_{L_true}.pt')
             # assert False 
 
@@ -1091,7 +1139,8 @@ class NRBStyleSelfCond(Sampler):
             _, symmsub  = symmetry.find_minimal_neighbors(fake_indep, self.symmRs, self.symmeta)
 
             # x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs, fit_symm=False).squeeze(0)
-            x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs).squeeze(0)
+            if symmsub.shape[0] > 1:
+                x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs).squeeze(0)
 
         px0 = px0.cpu()
         x_t_1 = x_t_1.cpu()

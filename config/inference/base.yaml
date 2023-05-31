@@ -39,6 +39,8 @@ inference:
   offset_scale: 1.0
   start_from_input: False
   subsymm_template: null 
+  subsymm_t1d_perfect: False
+  subsymm_template_xt_only: False
 
 
 contigmap:
