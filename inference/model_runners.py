@@ -365,7 +365,7 @@ class Sampler:
         if self.inf_conf.subsymm_template:
             indep.subsymm_seq        = self.target_feats['subsymm_seq'].to(self.device)
             indep.subsymm_xyz        = self.target_feats['subsymm_xyz'].to(self.device)
-            indep.mask_t_2d_subsymm  = self.target_feats['mask_2d_subsymm'].to(self.device)
+            indep.mask_t_2d_subsymm  = self.target_feats['mask_2d_subsymm'].to(self.device) if torch.is_tensor(self.target_feats['mask_2d_subsymm']) else None
 
         is_partial = self.diffuser_conf.partial_T is not None
         indep, is_diffused = self.model_adaptor.insert_contig(indep, self.contig_map, partial_T=is_partial) 
@@ -456,7 +456,7 @@ class Sampler:
         
 
         # symmetrize the inputs 
-        self.symmids, self.symmRs, self.symmeta, self.symmsub = None,None,None,None
+        self.symmids, self.symmRs, self.symmeta, self.cur_symmsub = None,None,None,None
         if self.symmetry is not None:
             assert self._conf.inference.internal_sym is None, 'cannot use both new (inference.internal_sym) and classic (inference.symmetry) symmetry simultaneously'
             # classic version
@@ -488,6 +488,33 @@ class Sampler:
                 norm = torch.norm(motif_com, dim=-1, keepdim=True)
                 offset = motif_com / norm
 
+            # Check if C2/3/5 template going into I -- if True, offset in direction of first chain in template 
+            cond_a = self.inf_conf.subsymm_template is not None
+            cond_b = self._conf.inference.internal_sym.lower() in ['i','icos','icosahedral']
+            cond_c = self.target_feats['subsymm_symbol'].lower() in ['c2','c3','c5']
+            if cond_a and cond_b and cond_c:
+                print('Detected C2/3/5 template going into I symmetry, offset is in the direction of the first chain in the template')
+                offset = None 
+                
+                # Offset combins two things
+                # 1. offset toward center of mass of first chain in template
+                # 2. offset away from origin in the direction of sym ax of subsymm template
+
+                # (1)
+                tmplt_xyz    = self.target_feats['subsymm_xyz']
+                tmplt_lasu   = self.target_feats['subsymm_lasu']
+                tmplt_xyz_A  = tmplt_xyz[:tmplt_lasu] # first chain of template
+                com_A        = torch.mean(tmplt_xyz_A[:,1], dim=0)
+                offset_chA   = com_A / torch.norm(com_A, dim=-1, keepdim=True)
+
+                # (2)
+                MAGIC_AXIS_OFFSET_SCALE = 3
+                tmplt_axis   = self.target_feats['subsymm_axis']
+                offset_tmplt = tmplt_axis / torch.norm(tmplt_axis, dim=-1) * MAGIC_AXIS_OFFSET_SCALE
+
+                # combine
+                offset = offset_chA + offset_tmplt
+
 
             # scale offset w.r.t ASU length 
             Lasu = indep.xyz.shape[0]
@@ -514,14 +541,15 @@ class Sampler:
             # this is the step that duplicates starting coordinates 
             indep, symmsub  = symmetry.find_minimal_neighbors(indep, symmRs, symmeta)
 
-            
+            # indep.write_pdb('./debug_indep_offset_cha_scale3.pdb')
+            # sys.exit('Exiting early')
 
             
             # for passing to RF fwd pass in self.sample_step()
-            self.symmids  = symmids.to(self.device)
-            self.symmRs   = symmRs.to(self.device)
-            self.symmeta  = [[symmeta[0][0].to(self.device)], symmeta[1]]
-            self.symmsub  = symmsub.to(self.device)
+            self.symmids        = symmids.to(self.device)
+            self.symmRs         = symmRs.to(self.device)
+            self.symmeta        = [[symmeta[0][0].to(self.device)], symmeta[1]]
+            self.cur_symmsub    = symmsub.to(self.device)
 
             print('ENTERED SYMMETRY MODE*****************')
 
@@ -941,69 +969,123 @@ class NRBStyleSelfCond(Sampler):
         # if exists, slice in the t2d from subsym template 
         if self.inf_conf.subsymm_template is not None:
             mask_t_2d_subsymm = indep.mask_t_2d_subsymm
-            xyz_subsymm = indep.subsymm_xyz
+            # xyz_subsymm       = indep.subsymm_xyz
+            xyz_subsymm = self.target_feats['subsymm_xyz']
+            
+            # translate subsym along sym axis if not C1 to ensure correct 
+            if self.target_feats['subsymm_symbol'].lower() != 'c1':
+                xyz_subsymm += 5*self.target_feats['subsymm_axis']
 
-            mask_t = torch.ones_like(mask_t_2d_subsymm).bool() # this mask is for coordinates that don't exist
+            # Make new xyz_t monomer with true template embedded into dummy zeros 
+            _,natom,_ = xyz_subsymm.shape
+            xyz_t = torch.zeros((self.Lasu,natom,3)).to(self.device)
+            mask_t = torch.zeros((self.Lasu,)).to(self.device).bool()
 
-            L = xyz_subsymm.shape[0]
-            zeros = torch.zeros(1,L,9,3).to(self.device)
-            xyz_subsymm_full = torch.cat([xyz_subsymm[None],zeros], dim=2)
+            con_ref_idx0 = self.contig_map.get_mappings()['con_ref_idx0']
+            con_hal_idx0 = self.contig_map.get_mappings()['con_hal_idx0']
+            # single chain embedded into zeros according to contigs 
+            xyz_t[con_hal_idx0]  = xyz_subsymm[con_ref_idx0].to(self.device)
+            mask_t[con_hal_idx0] = True 
+
+            # now get xyz_t for current subsymm/Rs being modelled 
+            cur_Rs = self.symmRs[self.cur_symmsub]
+            xyz_t  = torch.einsum('sji,lai->slaj',cur_Rs.transpose(-1,-2), xyz_t).squeeze()
+            xyz_t  = xyz_t.reshape(len(cur_Rs)*self.Lasu,natom,3)
+            mask_t = mask_t.repeat(len(cur_Rs))
+
+            # calculate T2d on (propogated) subsym template
+            L                = xyz_t.shape[0]
+            zeros            = torch.zeros(1,L,9,3).to(self.device)
+            xyz_subsymm_full = torch.cat([xyz_t[None],zeros], dim=2)
             assert xyz_subsymm_full.shape == (1,L,36,3), f'Got shape: {xyz_subsymm_full.shape}'
 
             is_sm = indep.is_sm
             atom_frames = rfi.atom_frames[0]
 
+            # get t2d for subsym template
             t2d_subsymm, _ = util.get_t2d(xyz_subsymm_full,
-                                       is_sm, 
-                                       atom_frames)
+                                          is_sm, 
+                                          atom_frames)
             
-            # now slice out relevant parts of t2d_subsymm and put into rfi.t2d
-            symmsub = self.symmsub 
-            # remap to modelled subunits
-            mask_t_2d_subsymm_applied = mask_t_2d_subsymm[:,symmsub[:,None],symmsub[None,:]]
-            mask_t_2d_subsymm_applied = mask_t_2d_subsymm_applied.repeat_interleave(self.Lasu,dim=1).repeat_interleave(self.Lasu,dim=2)
+            # Now slice in the t2d from subsym template into t2d going into model 
+            # Make sure to acknowledge placement of t2d chunks within contigs 
+            
+            # Template was > C1 
+            if mask_t_2d_subsymm != None:
 
-            # make same shape as t2d tensors to apply in one fell swoop 
-            mask_t_applied = mask_t_2d_subsymm_applied.unsqueeze(-1).expand_as(rfi.t2d)
+                # remap to modelled subunits
+                # ic(self.cur_symmsub)
+                mask_t_2d_subsymm_applied = mask_t_2d_subsymm[:,self.cur_symmsub[:,None],self.cur_symmsub[None,:]]
+                # fig, ax = plt.subplots()
+                # ax.imshow(mask_t_2d_subsymm_applied[0].cpu().numpy())
+                # plt.savefig('mask_t_2d_subsymm_applied_TRUEfix_C3.png')
+                mask_t_2d_subsymm_applied = mask_t_2d_subsymm_applied.repeat_interleave(self.Lasu,dim=1).repeat_interleave(self.Lasu,dim=2)
+                
+                mask_t_2d = mask_t[:,None] * mask_t[None,:] # grabs only residues that are motifs in contigs
+                mask_t_2d_subsymm_applied = mask_t_2d * mask_t_2d_subsymm_applied
+
+                # fig, ax = plt.subplots()
+                # ax.imshow(mask_t_2d_subsymm_applied.squeeze().cpu().numpy())
+                # plt.savefig('after_contigs_masking_C3_long.png')
+                # sys.exit('debugging')
+
+                # make same shape as t2d tensors to apply in one fell swoop 
+                mask_2d_final = mask_t_2d_subsymm_applied.unsqueeze(-1).expand_as(rfi.t2d)
+
+                # Now slice in subsymm template, phew! 
+                rfi.t2d[mask_2d_final] = t2d_subsymm[:,None,...].expand_as(rfi.t2d)[mask_2d_final]
+            
+            else:
+                # template was C1
+                # eye matrix same shape as total chains being modelled - intra-chain only 
+                mask_t_2d_subsymm_applied = torch.eye(self.symmRs.shape[0]).bool().to(self.device)[None]
+                mask_t_2d_subsymm_applied = mask_t_2d_subsymm_applied.repeat_interleave(self.Lasu,dim=1).repeat_interleave(self.Lasu,dim=2)
+
+                raise NotImplementedError('Need to implement C1 subsymmetry')
+
+
+            # outdir='/home/davidcj/projects/rf_diffusion_2template/rf_diffusion/'
+            # torch.save(mask_t_2d_subsymm_applied, f'{outdir}/mask_t_applied_churro_c1motif.pt')
+            # sys.exit('debugging')
 
             # Test mask: 
-            if True: # ONLY FOR TESTING
-                mask = torch.zeros(416,416)
-                LASU = 208
-                L_true = 100
+            # if True: # ONLY FOR TESTING
+            #     mask = torch.zeros(416,416)
+            #     LASU = 208
+            #     L_true = 100
 
-                # top left 
-                mask[:L_true,:L_true] = 1
-                # bottom left 
-                mask[LASU:LASU+L_true,:L_true] = 1
-                # top right 
-                mask[:L_true,LASU:LASU+L_true] = 1
-                # bottom right
-                mask[LASU:LASU+L_true,LASU:LASU+L_true] = 1
+            #     # top left 
+            #     mask[:L_true,:L_true] = 1
+            #     # bottom left 
+            #     mask[LASU:LASU+L_true,:L_true] = 1
+            #     # top right 
+            #     mask[:L_true,LASU:LASU+L_true] = 1
+            #     # bottom right
+            #     mask[LASU:LASU+L_true,LASU:LASU+L_true] = 1
 
-                mask = mask.bool()
-                if self.inf_conf.subsymm_template_xt_only:
-                    # Slicing subsymm template into only Xt T2D
-                    mask_t_applied1 = mask[...,None].expand_as(rfi.t2d[0,0])
-                    false_mask      = torch.zeros_like(mask_t_applied1).bool()
+            #     mask = mask.bool()
+            #     if self.inf_conf.subsymm_template_xt_only:
+            #         # Slicing subsymm template into only Xt T2D
+            #         mask_t_applied1 = mask[...,None].expand_as(rfi.t2d[0,0])
+            #         false_mask      = torch.zeros_like(mask_t_applied1).bool()
 
-                    # A mask which is True for Xt, False for self conditioned template
-                    # I.e., only apply subsymm template to Xt
-                    mask_t_applied2 = torch.stack([mask_t_applied1, false_mask], dim=0)[None]
+            #         # A mask which is True for Xt, False for self conditioned template
+            #         # I.e., only apply subsymm template to Xt
+            #         mask_t_applied2 = torch.stack([mask_t_applied1, false_mask], dim=0)[None]
 
-                    rfi.t2d[mask_t_applied2] = t2d_subsymm[mask_t_applied1[None]] 
-                else:
-                    # outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/experiments/052923_2template/disk_t2d/'
-                    # torch.save(rfi.t2d, outdir + f'C2_t2d_before_mask_Ltemplated_{L_true}.pt')
+            #         rfi.t2d[mask_t_applied2] = t2d_subsymm[mask_t_applied1[None]] 
+            #     else:
+            #         # outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/experiments/052923_2template/disk_t2d/'
+            #         # torch.save(rfi.t2d, outdir + f'C2_t2d_before_mask_Ltemplated_{L_true}.pt')
 
 
-                    # Sliceing subsymm template into both Xt and SC T2D's 
-                    mask_t_applied = mask[None,None,...,None].expand_as(rfi.t2d)
-                    rfi.t2d[mask_t_applied] = t2d_subsymm[None].repeat(1,2,1,1,1)[mask_t_applied] 
+            #         # Sliceing subsymm template into both Xt and SC T2D's 
+            #         mask_t_applied = mask[None,None,...,None].expand_as(rfi.t2d)
+            #         rfi.t2d[mask_t_applied] = t2d_subsymm[None].repeat(1,2,1,1,1)[mask_t_applied] 
 
-                    # torch.save(rfi.t2d, outdir + f'C2_t2d_after_mask_Ltemplated_{L_true}.pt')
+            #         # torch.save(rfi.t2d, outdir + f'C2_t2d_after_mask_Ltemplated_{L_true}.pt')
 
-                    # assert False 
+            #         # assert False 
 
             # replace the portion of t2d with the subsymmetric template
             # outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/tmp/'
@@ -1033,7 +1115,7 @@ class NRBStyleSelfCond(Sampler):
                 kwargs.update({'symmids':self.symmids,
                                'symmRs' :self.symmRs,
                                'symmeta':self.symmeta,
-                               'symmsub':self.symmsub}) # None by default - see self.sample_init()
+                               'symmsub':self.cur_symmsub}) # None by default - see self.sample_init()
                 # kwargs.update({'t':t})
                 
                 if REPORT_MEM:
@@ -1055,6 +1137,7 @@ class NRBStyleSelfCond(Sampler):
                 #         assert False 
 
                 rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)
+                self.cur_symmsub = rfo.symmsub
                 print('********* SUCCESSFULL MODEL FORWARD *******')
 
                 if REPORT_MEM:

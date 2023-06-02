@@ -217,7 +217,7 @@ def sample_one(sampler, simple_logging=False):
             symmRs = sampler.symmRs.cpu()   # get symmetry operations for whole complex
             O = symmRs.shape[0]             # get total num of subunits 
             # find number of subunits that were modeled
-            Nsub = sampler.symmsub.shape[0]
+            Nsub = sampler.cur_symmsub.shape[0]
             Lasu = px0.shape[0] // Nsub
 
             # grab ASU and propogate full complex 

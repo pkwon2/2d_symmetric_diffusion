@@ -125,6 +125,7 @@ class RFO:
     msa: torch.Tensor
     pair: torch.Tensor
     state: torch.Tensor
+    symmsub: torch.Tensor
 
     # dataclass.astuple returns a deepcopy of the dataclass in which
     # gradients of member tensors are detached, so we define a 

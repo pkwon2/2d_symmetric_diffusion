@@ -1314,7 +1314,58 @@ def get_pointsym_meta(symmid):
     return symmatrix, Rs,metasymm, offset
 
 # find a particular subsymmetry within a larger symmetry
-def find_subsymmetry( xyz_t, symmgp, symmaxes, symmRs, eps=1e-6 ):
+# def find_subsymmetry( xyz_t, symmgp, symmaxes, symmRs, eps=1e-4 ):
+#     N,L = xyz_t.shape[:2]
+#     S = symmRs.shape[0]
+
+#     # only C subsymms for now...
+#     if (len(symmaxes)!=1):
+#         print ("Unsupported symmetry in find_subsymmetry:", symmgp)
+
+#     nfold = symmaxes[0][0]
+
+#     print('About to get rotation from matrix')
+#     print(symmRs[1:].shape)
+#     ang_i, ax_i = rotation_from_matrix(symmRs[1:]) # 1st xform is identity, skip
+
+#     # a) find 'nfold' subunits with the same axis and rotations of [0...nfold-1]*2*pi/nfold
+#     nfold_i  = (ang_i*nfold/(2*np.pi))
+#     cand1    = (torch.abs(nfold_i-torch.round(nfold_i)) < eps).nonzero()[0,0]
+#     similars = (torch.linalg.norm(ax_i - ax_i[cand1], dim=-1) < eps).nonzero()[:,0] + 1 # +1 since we skipped 1st
+
+#     assert (similars.shape[0] == nfold-1)
+#     ax_i = ax_i[cand1]
+
+#     # b) rotate / translate symmaxes to ax_i
+#     tgt_axis, tgt_origin = symmaxes[0][1], symmaxes[0][2]
+#     ic(tgt_axis, tgt_origin)
+#     # R_1: first rotate axes to be coincident
+#     # R_2: random rotation about symm axis
+#     #   inside/outside "flips" are handled in offset code
+#     dotprod = torch.sum(tgt_axis*ax_i)
+#     if ( torch.abs( dotprod ) > 1-eps):
+#         R_1 = torch.eye(3, device=tgt_axis.device)
+#     else:
+#         axis_rot = torch.cross( tgt_axis, ax_i )
+#         axis_rot = axis_rot / torch.linalg.norm(axis_rot)
+#         angle_rot = torch.acos( dotprod )
+#         R_1 = matrix_from_rotation( angle_rot, axis_rot )
+
+#     angle_rot = np.random.rand()*2*np.pi
+#     R_2 = matrix_from_rotation( angle_rot, tgt_axis )
+
+#     R_12 = R_1 @ R_2
+#     xyz = torch.einsum('ij,braj->brai', R_12, xyz_t-tgt_origin)
+
+#     # c) make res-pair mask
+#     mask_t = torch.zeros((1,S,S), dtype=torch.bool, device=tgt_axis.device)
+#     mask_t[0,0,0] = True
+#     mask_t[0,0,similars] = True
+#     mask_t[0,similars,0] = True
+#     mask_t[0,similars[:,None],similars[None,:]] = True
+#     return xyz, mask_t, ax_i
+
+def find_subsymmetry( xyz_t, symmgp, symmaxes, symmRs, eps=1e-6, all_subsymms=True ):
     N,L = xyz_t.shape[:2]
     S = symmRs.shape[0]
 
@@ -1323,16 +1374,12 @@ def find_subsymmetry( xyz_t, symmgp, symmaxes, symmRs, eps=1e-6 ):
         print ("Unsupported symmetry in find_subsymmetry:", symmgp)
 
     nfold = symmaxes[0][0]
-
-    print('About to get rotation from matrix')
-    print(symmRs[1:].shape)
     ang_i, ax_i = rotation_from_matrix(symmRs[1:]) # 1st xform is identity, skip
 
     # a) find 'nfold' subunits with the same axis and rotations of [0...nfold-1]*2*pi/nfold
     nfold_i = (ang_i*nfold/(2*np.pi))
     cand1 = (torch.abs(nfold_i-torch.round(nfold_i)) < eps).nonzero()[0,0]
     similars = (torch.linalg.norm(ax_i - ax_i[cand1], dim=-1) < eps).nonzero()[:,0] + 1 # +1 since we skipped 1st
-
     assert (similars.shape[0] == nfold-1)
     ax_i = ax_i[cand1]
 
@@ -1362,7 +1409,15 @@ def find_subsymmetry( xyz_t, symmgp, symmaxes, symmRs, eps=1e-6 ):
     mask_t[0,0,similars] = True
     mask_t[0,similars,0] = True
     mask_t[0,similars[:,None],similars[None,:]] = True
+
+    if (all_subsymms):
+        symmRs_ij = torch.einsum('sji,tjk->stik', symmRs,symmRs)
+        symmRs_ijk = torch.sum( torch.abs(symmRs_ij[:,:,None] - symmRs[similars][None,None]), dim=(-1,-2) )
+        mask_t, _ = symmRs_ijk.min(dim=-1)
+        mask_t = (mask_t<eps)[None]
+        
     return xyz, mask_t, ax_i
+
 
 def propogate_repeat_features(indep, Lasu):
     """
