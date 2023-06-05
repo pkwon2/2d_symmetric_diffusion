@@ -1116,7 +1116,7 @@ class NRBStyleSelfCond(Sampler):
                                'symmRs' :self.symmRs,
                                'symmeta':self.symmeta,
                                'symmsub':self.cur_symmsub}) # None by default - see self.sample_init()
-                # kwargs.update({'t':t})
+                kwargs.update({'t':t})
                 
                 if REPORT_MEM:
                     print('MEM REPORT LINE 916 model runners')
