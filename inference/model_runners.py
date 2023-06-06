@@ -1034,6 +1034,12 @@ class NRBStyleSelfCond(Sampler):
 
                 # Now slice in subsymm template, phew! 
                 rfi.t2d[mask_2d_final] = t2d_subsymm[:,None,...].expand_as(rfi.t2d)[mask_2d_final]
+
+                # DJ - add in subsymm template to rfixyz_t because it's currently zeros 
+                if self.inf_conf.input_xyz_t:
+                    # xyz_t is shape (1,2,L,3), CA only
+                    print('ADDING SUBSYMM TEMPLATE TO XYZ_T')
+                    rfi.xyz_t[:,:,mask_t] = xyz_subsymm_full[:,None,mask_t,1,:] # CA only 
             
             else:
                 # template was C1

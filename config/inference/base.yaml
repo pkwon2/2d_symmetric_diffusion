@@ -42,6 +42,7 @@ inference:
   subsymm_t1d_perfect: False
   subsymm_template_xt_only: False
   subsymm_template_all_possible: True 
+  input_xyz_t: False
 
 
 contigmap:
