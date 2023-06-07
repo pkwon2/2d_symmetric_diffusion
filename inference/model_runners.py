@@ -118,6 +118,8 @@ class Sampler:
         # Temporary hack
         self.model.assert_single_sequence_input = True
         self.model_adaptor.model = self.model
+        # DJ additions 
+        self.cur_rigid_tmplt = None 
 
         # TODO: Add symmetrization RMSD check here
         if self._conf.seq_diffuser.seqdiff is None:
@@ -407,6 +409,13 @@ class Sampler:
             has_imperfect_t1d = old_is_diffused.clone()
             self.has_imperfect_t1d = has_imperfect_t1d
 
+            # if rigid_symm_motif, don't diffuse it with diffuser but still allow movement with denoiser
+            if (self.inf_conf.rigid_symm_motif) or (self.inf_conf.initial_rigid_motif):
+                diffuser_is_diffused = torch.clone(old_is_diffused)
+            else:
+                # not rigid motif, diffuse all 
+                diffuser_is_diffused = self.is_diffused.clone()
+
         atom_mask = None
         seq_one_hot = None
         if not self.inf_conf.start_from_input:
@@ -415,7 +424,7 @@ class Sampler:
                 seq_one_hot,
                 atom_mask,
                 indep.is_sm,
-                diffusion_mask=~is_diffused,
+                diffusion_mask=~diffuser_is_diffused,
                 t_list=t_list,
                 diffuse_sidechains=self.preprocess_conf.sidechain_input,
                 include_motif_sidechains=self.preprocess_conf.motif_sidechain_input)
@@ -992,6 +1001,8 @@ class NRBStyleSelfCond(Sampler):
             xyz_t  = torch.einsum('sji,lai->slaj',cur_Rs.transpose(-1,-2), xyz_t).squeeze()
             xyz_t  = xyz_t.reshape(len(cur_Rs)*self.Lasu,natom,3)
             mask_t = mask_t.repeat(len(cur_Rs))
+            mask_t_asu = mask_t.clone()         # dj - new for rigid motif fitting 
+            mask_t_asu[self.Lasu:] = False 
 
             # calculate T2d on (propogated) subsym template
             L                = xyz_t.shape[0]
@@ -1014,25 +1025,17 @@ class NRBStyleSelfCond(Sampler):
             if mask_t_2d_subsymm != None:
 
                 # remap to modelled subunits
-                # ic(self.cur_symmsub)
+                # creates tensor that is (Nres,Nres)
                 mask_t_2d_subsymm_applied = mask_t_2d_subsymm[:,self.cur_symmsub[:,None],self.cur_symmsub[None,:]]
-                # fig, ax = plt.subplots()
-                # ax.imshow(mask_t_2d_subsymm_applied[0].cpu().numpy())
-                # plt.savefig('mask_t_2d_subsymm_applied_TRUEfix_C3.png')
                 mask_t_2d_subsymm_applied = mask_t_2d_subsymm_applied.repeat_interleave(self.Lasu,dim=1).repeat_interleave(self.Lasu,dim=2)
                 
                 mask_t_2d = mask_t[:,None] * mask_t[None,:] # grabs only residues that are motifs in contigs
                 mask_t_2d_subsymm_applied = mask_t_2d * mask_t_2d_subsymm_applied
 
-                # fig, ax = plt.subplots()
-                # ax.imshow(mask_t_2d_subsymm_applied.squeeze().cpu().numpy())
-                # plt.savefig('after_contigs_masking_C3_long.png')
-                # sys.exit('debugging')
-
                 # make same shape as t2d tensors to apply in one fell swoop 
                 mask_2d_final = mask_t_2d_subsymm_applied.unsqueeze(-1).expand_as(rfi.t2d)
 
-                # Now slice in subsymm template, phew! 
+                # Now slice in subsymm template
                 rfi.t2d[mask_2d_final] = t2d_subsymm[:,None,...].expand_as(rfi.t2d)[mask_2d_final]
 
                 # DJ - add in subsymm template to rfixyz_t because it's currently zeros 
@@ -1047,58 +1050,14 @@ class NRBStyleSelfCond(Sampler):
                 mask_t_2d_subsymm_applied = torch.eye(self.symmRs.shape[0]).bool().to(self.device)[None]
                 mask_t_2d_subsymm_applied = mask_t_2d_subsymm_applied.repeat_interleave(self.Lasu,dim=1).repeat_interleave(self.Lasu,dim=2)
 
-                raise NotImplementedError('Need to implement C1 subsymmetry')
+                mask_t_2d = mask_t[:,None] * mask_t[None,:] # grabs only residues that are motifs in contigs
+                mask_t_2d_subsymm_applied = mask_t_2d * mask_t_2d_subsymm_applied
 
+                # make same shape as t2d tensors to apply in one fell swoop
+                mask_2d_final = mask_t_2d_subsymm_applied.unsqueeze(-1).expand_as(rfi.t2d)
 
-            # outdir='/home/davidcj/projects/rf_diffusion_2template/rf_diffusion/'
-            # torch.save(mask_t_2d_subsymm_applied, f'{outdir}/mask_t_applied_churro_c1motif.pt')
-            # sys.exit('debugging')
-
-            # Test mask: 
-            # if True: # ONLY FOR TESTING
-            #     mask = torch.zeros(416,416)
-            #     LASU = 208
-            #     L_true = 100
-
-            #     # top left 
-            #     mask[:L_true,:L_true] = 1
-            #     # bottom left 
-            #     mask[LASU:LASU+L_true,:L_true] = 1
-            #     # top right 
-            #     mask[:L_true,LASU:LASU+L_true] = 1
-            #     # bottom right
-            #     mask[LASU:LASU+L_true,LASU:LASU+L_true] = 1
-
-            #     mask = mask.bool()
-            #     if self.inf_conf.subsymm_template_xt_only:
-            #         # Slicing subsymm template into only Xt T2D
-            #         mask_t_applied1 = mask[...,None].expand_as(rfi.t2d[0,0])
-            #         false_mask      = torch.zeros_like(mask_t_applied1).bool()
-
-            #         # A mask which is True for Xt, False for self conditioned template
-            #         # I.e., only apply subsymm template to Xt
-            #         mask_t_applied2 = torch.stack([mask_t_applied1, false_mask], dim=0)[None]
-
-            #         rfi.t2d[mask_t_applied2] = t2d_subsymm[mask_t_applied1[None]] 
-            #     else:
-            #         # outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/experiments/052923_2template/disk_t2d/'
-            #         # torch.save(rfi.t2d, outdir + f'C2_t2d_before_mask_Ltemplated_{L_true}.pt')
-
-
-            #         # Sliceing subsymm template into both Xt and SC T2D's 
-            #         mask_t_applied = mask[None,None,...,None].expand_as(rfi.t2d)
-            #         rfi.t2d[mask_t_applied] = t2d_subsymm[None].repeat(1,2,1,1,1)[mask_t_applied] 
-
-            #         # torch.save(rfi.t2d, outdir + f'C2_t2d_after_mask_Ltemplated_{L_true}.pt')
-
-            #         # assert False 
-
-            # replace the portion of t2d with the subsymmetric template
-            # outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/tmp/'
-            # torch.save(rfi.t2d, outdir + f'C1noslice_t2d_before_partial_mask_Lvisible_{L_true}.pt')
-            # rfi.t2d[mask_t_applied] = t2d_subsymm[None][mask_t_applied]
-            # torch.save(rfi.t2d, outdir + f'C1noslice_t2d_after_partial_mask_Lvisible_{L_true}.pt')
-            # assert False 
+                # Now slice in subsymm template
+                rfi.t2d[mask_2d_final] = t2d_subsymm[:,None,...].expand_as(rfi.t2d)[mask_2d_final]
 
         
         if self.symmetry is not None:
@@ -1122,25 +1081,13 @@ class NRBStyleSelfCond(Sampler):
                                'symmRs' :self.symmRs,
                                'symmeta':self.symmeta,
                                'symmsub':self.cur_symmsub}) # None by default - see self.sample_init()
-                kwargs.update({'t':t})
+                kwargs.update({'t':t}) # added for symm fitting in RF - model needs to know timestep 
                 
                 if REPORT_MEM:
                     print('MEM REPORT LINE 916 model runners')
                     mem_report() 
                     print('*'*50+'\n\n')
 
-                # if t == 50:
-                #     indep_outf = './tmp/RFI_t50_symm_fixseq_L416.pkl'
-                #     # save it 
-                #     with open(indep_outf, 'wb') as f:
-                #         pickle.dump(rfi, f)
-                        
-                # elif t == 45:
-                #     indep_outf = './tmp/RFI_t45_symm_fixseq_L416.pkl'
-                #     # save it
-                #     with open(indep_outf, 'wb') as f:
-                #         pickle.dump(rfi, f)
-                #         assert False 
 
                 rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)
                 self.cur_symmsub = rfo.symmsub
@@ -1199,8 +1146,27 @@ class NRBStyleSelfCond(Sampler):
         self._log.info(
                 f'Timestep {t}, current sequence: { rf2aa.chemical.seq2chars(torch.argmax(pseq_0, dim=-1).tolist())}')
 
+        # doing rigid motif symm scaffolding
+        if self._conf.inference.rigid_symm_motif:
+            if self.cur_rigid_tmplt is None:
+                self.cur_rigid_tmplt = xyz_subsymm_full # xyz of propogated motif 
+                ic(xyz_subsymm_full.shape)
+
+            rigid_symm_motif_kwargs = {'xyz_template'   : self.cur_rigid_tmplt.squeeze(dim=0),
+                                       'motif_mask'     : mask_t,
+                                       'symmRs'         : self.symmRs,
+                                       'symmsub'        : self.cur_symmsub}
+        else:
+            rigid_symm_motif_kwargs = {}
+
+        
+        ### Can also do the repeat protein motif fitting kwargs here 
+        # if self._conf.inference.rigid_repeat_motif:
+        # ... 
+
+
         if t > self._conf.inference.final_step:
-            x_t_1, seq_t_1, tors_t_1, px0 = self.denoiser.get_next_pose(
+            x_t_1, seq_t_1, tors_t_1, px0, cur_rigid_tmplt = self.denoiser.get_next_pose(
                 xt=rfi.xyz[0,:,:14].cpu(),
                 px0=px0,
                 t=t,
@@ -1210,8 +1176,10 @@ class NRBStyleSelfCond(Sampler):
                 pseq0=pseq_0,
                 diffuse_sidechains=self.preprocess_conf.sidechain_input,
                 align_motif=self.inf_conf.align_motif,
-                include_motif_sidechains=self.preprocess_conf.motif_sidechain_input
+                include_motif_sidechains=self.preprocess_conf.motif_sidechain_input,
+                rigid_symm_motif_kwargs=rigid_symm_motif_kwargs
             )
+            self.cur_rigid_tmplt = cur_rigid_tmplt
         else:
             px0 = px0.cpu()
             px0[~self.is_diffused] = indep.xyz[~self.is_diffused]

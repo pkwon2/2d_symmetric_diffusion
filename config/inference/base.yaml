@@ -43,6 +43,8 @@ inference:
   subsymm_template_xt_only: False
   subsymm_template_all_possible: True 
   input_xyz_t: False
+  rigid_symm_motif: False
+  initial_rigid_motif: False
 
 
 contigmap:

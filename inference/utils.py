@@ -23,6 +23,7 @@ import logging
 import string 
 import hydra
 import rf2aa.chemical
+from rf2aa.kinematics import normQ, Qs2Rs
 import aa_model
 import parsers
 import matplotlib.pyplot as plt
@@ -723,7 +724,8 @@ class Denoise():
                       diffuse_sidechains,
                       fix_motif=True,
                       align_motif=True,
-                      include_motif_sidechains=True):
+                      include_motif_sidechains=True,
+                      rigid_symm_motif_kwargs={}):
         """
         Wrapper function to take px0, xt and t, and to produce xt-1
         First, aligns px0 to xt
@@ -785,13 +787,17 @@ class Denoise():
 
         # Apply gradient step from guiding potentials
         # This can be moved to below where the full atom representation is calculated to allow for potentials involving sidechains
-        
-        grad_ca = self.get_potential_gradients(seq_t.clone(), xt.clone(), diffusion_mask=diffusion_mask)
-    
+        grad_ca    = self.get_potential_gradients(seq_t.clone(), xt.clone(), diffusion_mask=diffusion_mask)
         ca_deltas += self.potential_manager.get_guide_scale(t) * grad_ca
         
         # add the delta to the new frames 
         frames_next = torch.from_numpy(frames_next) + ca_deltas[:,None,:]  # translate
+
+        # rigid-body fitting of motif for symmetry
+        if len(rigid_symm_motif_kwargs) > 0:
+            frames_next, next_rigid_tmplt = fit_rigid_motif_symm(frames_next, **rigid_symm_motif_kwargs)
+        else:
+            next_rigid_tmplt = None
 
         if diffuse_sidechains:
             if self.seq_diffuser:
@@ -830,7 +836,80 @@ class Denoise():
         if include_motif_sidechains:
             fullatom_next[:,diffusion_mask,:14] = xt[None,diffusion_mask]
 
-        return fullatom_next.squeeze()[:,:14,:], seq_next, torsions_next, px0
+        return fullatom_next.squeeze()[:,:14,:], seq_next, torsions_next, px0, next_rigid_tmplt
+    
+
+def fit_rigid_motif_symm(frames_next, motif_mask, xyz_template, symmRs, symmsub, TSCALE=1.0, **kwargs):
+        """
+        Takes in updated frames which may have perturbed the motif and fits a rigid body transformation 
+        of the motif to the updated coordinates. 
+        """
+        xyz_template_clone = xyz_template.clone()
+
+        def dist_error_comp(R0,T0,frames_next_motif,xyz_template,TSCALE):
+            template_COM = xyz_template.mean(dim=0)
+            template_corr = torch.einsum('ij,rj->ri', R0, xyz_template-template_COM) + template_COM + TSCALE*T0[None,None,:]
+            loss  = torch.abs(frames_next_motif-template_corr).mean()
+
+            return loss
+
+        def Q2R(Q):
+            Qs = torch.cat((torch.ones((1),device=Q.device),Q),dim=-1)
+            Qs = normQ(Qs)
+            return Qs2Rs(Qs[None,:]).squeeze(0)
+
+        # grab only the motif within the updated frames
+        frames_next_motif = frames_next.clone()[:,1,:].to(device=xyz_template.device)
+        frames_next_motif = frames_next_motif[motif_mask,:]
+        
+        # grab only the motif within the template 
+        xyz_template_ca = xyz_template[:,1,:]
+        xyz_template_ca = xyz_template_ca[motif_mask,:]
+        xyz_template_asu = xyz_template[motif_mask,:]
+
+        if symmRs is not None:
+            # only grab ASU 
+            frames_next_motif = frames_next_motif[:(frames_next_motif.shape[0] // len(symmsub)),:]
+            xyz_template_ca   = xyz_template_ca[:(xyz_template_ca.shape[0] // len(symmsub)),:]
+            xyz_template_asu  = xyz_template_asu[:(xyz_template_asu.shape[0] // len(symmsub)),:]
+
+
+        with torch.enable_grad():
+            T0 = torch.zeros(3,device=xyz_template.device).requires_grad_(True)
+            Q0 = torch.zeros(3,device=xyz_template.device).requires_grad_(True)
+
+        lbfgs = torch.optim.LBFGS([T0,Q0],
+                    history_size=10,
+                    max_iter=4,
+                    line_search_fn="strong_wolfe")
+        
+        def closure():
+            lbfgs.zero_grad()
+            loss = dist_error_comp(Q2R(Q0), T0, frames_next_motif, xyz_template_ca, TSCALE)
+            loss.backward()
+            return loss
+        
+        # fit the (ASU) motif to the updated coordinates
+        for e in range(12):
+            loss = lbfgs.step(closure)
+
+        # apply the fitted transformation to the motif
+        template_COM         = xyz_template.mean(dim=0)
+        updated_template_asu = torch.einsum('ij,brj->bri', Q2R(Q0), xyz_template_asu-template_COM) + template_COM + TSCALE*T0[None,None,:]
+
+        # re-symmetrize the fitted motif according to current symmsubs
+        if symmRs is not None:
+            updated_template = torch.einsum('sij,raj->srai', symmRs[symmsub], updated_template_asu)
+            s,r,a,i = updated_template.shape
+            updated_template_symm = updated_template.reshape(s*r,a,3).to(dtype=frames_next.dtype, device=frames_next.device)
+            updated_template_symm = updated_template_symm.detach()
+        
+        # replace the (slightly perturbed) motif with the fitted rigid motif 
+        frames_next[motif_mask] = updated_template_symm[:,:3,:]
+        # create new xyz_template that contains the current fitted motif
+        xyz_template_clone[motif_mask] = updated_template_symm.to(dtype=xyz_template.dtype, device=xyz_template.device)
+
+        return frames_next, xyz_template_clone #updated_template[: updated_template.shape[0] // len(symmsub)]
 
 
 def preprocess(seq, xyz_t, t, T, ppi_design, binderlen, target_res, device):
@@ -1150,14 +1229,7 @@ def process_target(pdb_path, parse_hetatom=False, center=True, inf_conf=None):
             xyz_t, mask_t_2d_subsymm, axis = symmetry.find_subsymmetry(xyz_t, symmgp, symmaxes, symmRs, all_subsymms=all_possible)
             # add intra-chain templating.. ones along diag 
             if all_possible:
-                # fig, ax = plt.subplots()
-                # ax.imshow(mask_t_2d_subsymm[0].cpu().numpy())
-                # plt.savefig('first_2d_subsymm_before_eye.png')
-                # ic(mask_t_2d_subsymm.shape)
                 mask_t_2d_subsymm = mask_t_2d_subsymm + torch.eye(mask_t_2d_subsymm.shape[1]).bool()[None]
-                # fig, ax = plt.subplots()
-                # ax.imshow(mask_t_2d_subsymm[0].cpu().numpy())
-                # plt.savefig('first_2d_subsymm_after_eye.png')
 
 
             angle = 360.0 / nfold
@@ -1191,6 +1263,9 @@ def process_target(pdb_path, parse_hetatom=False, center=True, inf_conf=None):
             out['axis'] = None 
             out['subsymm_xyz'] = xyz_t.squeeze()
             out['subsymm_seq'] = seq_t.reshape(-1)
+            out['subsymm_symbol'] = 'C1'
+            out['subsymm_axis'] = None
+
 
 
 
