@@ -598,6 +598,7 @@ class Sampler:
         
         # ic(indep.xyz.shape)
         # assert False
+        print('Total AA modeled: ', indep.xyz.shape[0])
         return indep
 
     def _preprocess(self, seq, xyz_t, t, repack=False):
@@ -1082,14 +1083,16 @@ class NRBStyleSelfCond(Sampler):
                                'symmeta':self.symmeta,
                                'symmsub':self.cur_symmsub}) # None by default - see self.sample_init()
                 kwargs.update({'t':t}) # added for symm fitting in RF - model needs to know timestep 
+                if self.inf_conf.p2p_crop > -1:
+                    kwargs.update({'p2p_crop':self.inf_conf.p2p_crop})
                 
                 if REPORT_MEM:
                     print('MEM REPORT LINE 916 model runners')
                     mem_report() 
                     print('*'*50+'\n\n')
 
-
-                rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)
+                with torch.cuda.amp.autocast(True):
+                    rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)
                 self.cur_symmsub = rfo.symmsub
                 print('********* SUCCESSFULL MODEL FORWARD *******')
 
@@ -1125,6 +1128,9 @@ class NRBStyleSelfCond(Sampler):
         logits      = rfo.get_seq_logits()
         seq_decoded = [rf2aa.chemical.num2aa[s] for s in rfi.seq[0]]
 
+        logits = logits.float()
+        px0    = px0.float()
+
         if self.seq_diffuser is None:
             # Default method of decoding sequence
             seq_probs   = torch.nn.Softmax(dim=-1)(logits.squeeze()/self.inf_conf.softmax_T)
@@ -1150,7 +1156,6 @@ class NRBStyleSelfCond(Sampler):
         if self._conf.inference.rigid_symm_motif:
             if self.cur_rigid_tmplt is None:
                 self.cur_rigid_tmplt = xyz_subsymm_full # xyz of propogated motif 
-                ic(xyz_subsymm_full.shape)
 
             rigid_symm_motif_kwargs = {'xyz_template'   : self.cur_rigid_tmplt.squeeze(dim=0),
                                        'motif_mask'     : mask_t,
@@ -1163,7 +1168,9 @@ class NRBStyleSelfCond(Sampler):
         ### Can also do the repeat protein motif fitting kwargs here 
         # if self._conf.inference.rigid_repeat_motif:
         # ... 
-
+        if self._conf.inference.rigid_repeat_motif:
+            if self.cur_rigid_tmplt is None: 
+                pass
 
         if t > self._conf.inference.final_step:
             x_t_1, seq_t_1, tors_t_1, px0, cur_rigid_tmplt = self.denoiser.get_next_pose(

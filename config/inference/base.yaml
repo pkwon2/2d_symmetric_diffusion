@@ -45,6 +45,8 @@ inference:
   input_xyz_t: False
   rigid_symm_motif: False
   initial_rigid_motif: False
+  p2p_crop: -1
+  rigid_repeat_motif: False
 
 
 contigmap:
