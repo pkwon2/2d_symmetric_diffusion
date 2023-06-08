@@ -415,9 +415,19 @@ class Sampler:
             else:
                 # not rigid motif, diffuse all 
                 diffuser_is_diffused = self.is_diffused.clone()
+        
+        else:
+            self.is_diffused = is_diffused
+            diffuser_is_diffused = self.is_diffused.clone()
+
+        # ic(indep.seq)
+        # ic(rf2aa.chemical.seq2chars(indep.seq))
+        # sys.exit()
 
         atom_mask = None
         seq_one_hot = None
+        center_crds = not (self._conf.inference.internal_sym is not None) # don't center coords if doing symmetry
+
         if not self.inf_conf.start_from_input:
             fa_stack, aa_masks, xyz_true = self.diffuser.diffuse_pose(
                 indep.xyz,
@@ -427,7 +437,9 @@ class Sampler:
                 diffusion_mask=~diffuser_is_diffused,
                 t_list=t_list,
                 diffuse_sidechains=self.preprocess_conf.sidechain_input,
-                include_motif_sidechains=self.preprocess_conf.motif_sidechain_input)
+                include_motif_sidechains=self.preprocess_conf.motif_sidechain_input,
+                center_crds=center_crds)
+            
             xT = fa_stack[-1].squeeze()[:,:14,:]
             xt = torch.clone(xT)
             indep.xyz = xt
@@ -1065,6 +1077,9 @@ class NRBStyleSelfCond(Sampler):
             idx_pdb = rfi.idx
             idx_pdb, self.chain_idx = self.symmetry.res_idx_procesing(res_idx=idx_pdb)
 
+
+        
+
         # Model Forward
         with torch.no_grad():
             if self.recycle_schedule[t-1] > 1:
@@ -1092,9 +1107,18 @@ class NRBStyleSelfCond(Sampler):
                     print('*'*50+'\n\n')
 
                 with torch.cuda.amp.autocast(True):
+                    # pickle.dump(rfi, open('060723_rfi.pkl','wb'))
+                    # sys.exit('debugging')
                     rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)
-                self.cur_symmsub = rfo.symmsub
                 print('********* SUCCESSFULL MODEL FORWARD *******')
+                self.cur_symmsub = rfo.symmsub
+                
+                # Symmsubs may have changed, so need to update Xt to match model predicted symmsubs
+                xt_asu = rfi.xyz.squeeze(dim=0)[:self.Lasu]
+                s = len(cur_Rs)
+                updated_xt = torch.einsum('sij,laj->lsai', cur_Rs, xt_asu) 
+                updated_xt = updated_xt.reshape(s*self.Lasu, -1, 3)
+                rfi.xyz = updated_xt.unsqueeze(0)
 
                 if REPORT_MEM:
                     print('MEM REPORT LINE 920 MODEL RUNNERS')
@@ -1184,7 +1208,8 @@ class NRBStyleSelfCond(Sampler):
                 diffuse_sidechains=self.preprocess_conf.sidechain_input,
                 align_motif=self.inf_conf.align_motif,
                 include_motif_sidechains=self.preprocess_conf.motif_sidechain_input,
-                rigid_symm_motif_kwargs=rigid_symm_motif_kwargs
+                rigid_symm_motif_kwargs=rigid_symm_motif_kwargs,
+                origin_before_update=self._conf.inference.origin_before_update,
             )
             self.cur_rigid_tmplt = cur_rigid_tmplt
         else:

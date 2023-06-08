@@ -725,7 +725,8 @@ class Denoise():
                       fix_motif=True,
                       align_motif=True,
                       include_motif_sidechains=True,
-                      rigid_symm_motif_kwargs={}):
+                      rigid_symm_motif_kwargs={},
+                      origin_before_update=False):
         """
         Wrapper function to take px0, xt and t, and to produce xt-1
         First, aligns px0 to xt
@@ -755,6 +756,10 @@ class Denoise():
 
             include_motif_sidechains (bool): Provide sidechains of the fixed motif to the model
         """
+        if origin_before_update:
+            COM_ALL = xt[:,1,:].mean(0)
+            xt = xt - COM_ALL
+            px0 = px0 - COM_ALL.to(px0.device)
 
         get_allatom = ComputeAllAtomCoords().to(device=xt.device)
         L,n_atom = xt.shape[:2]
@@ -835,6 +840,11 @@ class Denoise():
         
         if include_motif_sidechains:
             fullatom_next[:,diffusion_mask,:14] = xt[None,diffusion_mask]
+
+        if origin_before_update:
+            fullatom_next = fullatom_next + COM_ALL
+            px0 = px0 + COM_ALL.to(px0.device)
+            # print('Successful px0 origin before update')
 
         return fullatom_next.squeeze()[:,:14,:], seq_next, torsions_next, px0, next_rigid_tmplt
     

@@ -892,7 +892,7 @@ class Diffuser():
 
         print('Successful diffuser __init__')
     
-    def diffuse_pose(self, xyz, seq, atom_mask, is_sm, diffuse_sidechains=False, include_motif_sidechains=True, diffusion_mask=None, t_list=None):
+    def diffuse_pose(self, xyz, seq, atom_mask, is_sm, diffuse_sidechains=False, include_motif_sidechains=True, diffusion_mask=None, t_list=None, center_crds=True):
         """
         Given full atom xyz, sequence and atom mask, diffuse the protein 
         translations, rotations, and chi angles
@@ -926,12 +926,16 @@ class Diffuser():
         #Centre unmasked structure at origin, as in training (to prevent information leak)
         if torch.sum(diffusion_mask) != 0:
             self.motif_com=xyz[diffusion_mask,1,:].mean(dim=0) # This is needed for one of the potentials
-            # xyz = xyz - self.motif_com
-            print('WARNING: NOT CENTERING STRUCTURE AT ORIGIN')
+            if center_crds:
+                xyz = xyz - self.motif_com
+            else:
+                print('WARNING: NOT CENTERING STRUCTURE AT ORIGIN')
         elif torch.sum(diffusion_mask) == 0:
-            # xyz = xyz - xyz[:,1,:].mean(dim=0)
-            print('WARNING: NOT CENTERING STRUCTURE AT ORIGIN')
-            pass 
+            if center_crds:
+                xyz = xyz - xyz[:,1,:].mean(dim=0)
+            else:
+                print('WARNING: NOT CENTERING STRUCTURE AT ORIGIN')
+
         # ic(o.xyz[0])
         #xyz = xyz - xyz[nan_mask][:,1,:].mean(dim=0) # DJ aug 23, 2022 - commenting out bc now better logic to assert no nans 
         xyz_true = torch.clone(xyz)
