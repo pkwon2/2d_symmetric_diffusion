@@ -1115,8 +1115,12 @@ class NRBStyleSelfCond(Sampler):
                 
                 # Symmsubs may have changed, so need to update Xt to match model predicted symmsubs
                 xt_asu = rfi.xyz.squeeze(dim=0)[:self.Lasu]
+                cur_Rs = self.symmRs[self.cur_symmsub]
                 s = len(cur_Rs)
-                updated_xt = torch.einsum('sij,laj->lsai', cur_Rs, xt_asu) 
+                # xyz_t  = torch.einsum('sji,lai->slaj',cur_Rs.transpose(-1,-2), xyz_t).squeeze()
+                # xyz_t  = xyz_t.reshape(len(cur_Rs)*self.Lasu,natom,3)
+                # updated_xt = torch.einsum('sij,laj->slai', cur_Rs, xt_asu) 
+                updated_xt = torch.einsum('sji,lai->slaj', cur_Rs.transpose(-1,-2), xt_asu)
                 updated_xt = updated_xt.reshape(s*self.Lasu, -1, 3)
                 rfi.xyz = updated_xt.unsqueeze(0)
 
