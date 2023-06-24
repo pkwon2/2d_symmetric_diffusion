@@ -47,7 +47,11 @@ inference:
   initial_rigid_motif: False
   p2p_crop: -1
   rigid_repeat_motif: False
+  n_repeats: 3
   origin_before_update: False
+  two_template: False 
+  enforce_repeat_fit: False 
+  rigid_fit_optim_steps: 12
 
 
 contigmap:
@@ -108,6 +112,7 @@ model:
   main_block: null 
   symm_fit_start: -1
   clash: 4.0
+  lock_symmsubs_at: -1
 
 diffuser:
   T: 200

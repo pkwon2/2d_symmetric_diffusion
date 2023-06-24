@@ -8,7 +8,8 @@ import logging
 import numpy as np
 import sys
 import copy 
-from icecream import ic 
+from icecream import ic
+import matplotlib.pyplot as plt 
 
 format_rots = lambda r: torch.tensor(r).float()
 
@@ -1419,7 +1420,88 @@ def find_subsymmetry( xyz_t, symmgp, symmaxes, symmRs, eps=1e-6, all_subsymms=Tr
     return xyz, mask_t, ax_i
 
 
-def propogate_repeat_features(indep, Lasu):
+def fill_square_diagonal(x, val, k=0):
+    """
+    Fills the k'th diagonal of x with value val. x must be square.
+    """
+    assert x.shape[0] == x.shape[1] and len(x.shape) == 2
+
+    # compute how many entries we will fill 
+    n = x.shape[0] - abs(k)
+
+    # get the indices of the diagonal
+    if k >= 0:
+        row_idx = torch.arange(n)
+        col_idx = row_idx + k
+    else:
+        col_idx = torch.arange(n)
+        row_idx = col_idx - k
+
+    print(row_idx, col_idx)
+
+    # fill the diagonal
+    x[row_idx, col_idx] = val
+
+    return x
+
+
+def propogate_repeat_features2(indep, Lasu, inf_conf):
+    """
+    Propogates tensor information for repeat proteins (V2)
+    """
+    Ncopy = inf_conf.n_repeats 
+    L_orig = indep.xyz.shape[0]
+    o = copy.deepcopy(indep)
+
+    # 1D information 
+    ################
+
+    # copy xyz and add magic offset between initialized units 
+    MAGIC_OFFSET = 0.5 # Angstroms
+    orig_xyz = o.xyz.squeeze()
+    newcrds = []
+    for i in range(Ncopy):
+        new = orig_xyz + MAGIC_OFFSET * (i+1) * torch.tensor([1,0,0])
+        newcrds.append(new)
+    newcrds = torch.cat(newcrds, dim=0)
+    o.xyz = newcrds
+    
+    o.seq           = torch.cat([o.seq[None]]*Ncopy, dim=1).squeeze(0)
+    o.atom_frames   = torch.cat([o.atom_frames[None]]*Ncopy,dim=1).squeeze(0)
+    o.chirals       = torch.cat([o.chirals[None]]*Ncopy,dim=1).squeeze(0)
+    o.is_sm         = torch.cat([o.is_sm[None]]*Ncopy,dim=1).squeeze(0)
+
+    ntotal = len(o.idx)*Ncopy
+    o.idx = torch.arange(ntotal)
+    
+
+    o.terminus_type = torch.zeros(len(o.idx), dtype=o.terminus_type.dtype)
+    o.terminus_type[0] = 1
+    o.terminus_type[-1] = 2 
+    
+    # 2D information
+    ################
+
+    # bond features 
+    # set k=1 and k=-1 diagonals to peptide bond value 
+    # doesn't work for ligands yet 
+    print('WARNING: Assuming NO LIGANDS/LIGAND BONDS')
+    new_bond_feats = torch.zeros((Ncopy*L_orig, Ncopy*L_orig),dtype=torch.long)
+    peptide_bond = 5
+
+    new_bond_feats = fill_square_diagonal(new_bond_feats, peptide_bond, k=1)
+    new_bond_feats = fill_square_diagonal(new_bond_feats, peptide_bond, k=-1)
+    o.bond_feats = new_bond_feats
+
+    # same chain all true because all in same chain
+    new_same_chain = torch.ones((Ncopy*L_orig, Ncopy*L_orig),dtype=torch.bool)
+    o.same_chain = new_same_chain
+
+
+    return o
+
+
+def propogate_repeat_features(indep, Lasu, main_block):
     """
     Propogates tensor information for repeat proteins
 
@@ -1433,15 +1515,13 @@ def propogate_repeat_features(indep, Lasu):
     # Helper functions
     ################ 
     ################
-    # def copy_1d(x, L, ncopy):
-    #     for i in range(ncopy):
-    #         start = i*L
-    #         end = (i+1)*L
-    #         x[start:end] = x[:L]
-    #     return x
+    def copy_1d_reverse(x,L,ncopy, main_block):
 
-    def copy_1d_reverse(x,L,ncopy):
-        master = x[-L:]
+        if main_block == None:
+            master = x[-L:]
+        else: 
+            # get master from main block 
+            master = x[main_block*Lasu:(main_block+1)*Lasu]
 
         for i in range(ncopy):
             start = i*L
@@ -1450,8 +1530,13 @@ def propogate_repeat_features(indep, Lasu):
         
         return x
     
-    def copy_2d_diag_reverse(x, lasu):
+    def copy_2d_diag_reverse(x, lasu, main_block):
         assert x.shape[0] % lasu == 0
+
+        if main_block == None:
+            master = x[-lasu:, -lasu:]
+        else:
+            master = x[main_block*lasu:(main_block+1)*lasu, main_block*lasu:(main_block+1)*lasu]
 
         # copy along the diagonal 
         new = torch.zeros_like(x)
@@ -1460,7 +1545,7 @@ def propogate_repeat_features(indep, Lasu):
         for i in range(n):
             start = i * lasu
             end = (i+1) * lasu
-            new[start:end, start:end] = x[-lasu:, -lasu:]
+            new[start:end, start:end] = master
                 
 
         return new
@@ -1486,8 +1571,8 @@ def propogate_repeat_features(indep, Lasu):
     # 1D information 
     ################
     # copy first ASU of sequence over (reverse because SM is put last)
-    o.seq   = copy_1d_reverse(o.seq,         Lasu, Ncopy)
-    o.is_sm = copy_1d_reverse(o.is_sm,       Lasu, Ncopy)
+    o.seq   = copy_1d_reverse(o.seq,         Lasu, Ncopy, main_block)
+    o.is_sm = copy_1d_reverse(o.is_sm,       Lasu, Ncopy, main_block)
 
 
     # duplicate atom frames for the metal atoms
@@ -1496,7 +1581,6 @@ def propogate_repeat_features(indep, Lasu):
 
     # increment each sm index by (Lasu + 200)
     (i_sm,) = torch.where(o.is_sm) # only single dim 
-    assert len(i_sm)
 
     for i in i_sm:
         o.idx[i]    += (Lasu*i + 200) # make this metal its own chain
@@ -1506,7 +1590,7 @@ def propogate_repeat_features(indep, Lasu):
 
     # 2D information
     # Bond features
-    o.bond_feats = copy_2d_diag_reverse(o.bond_feats, Lasu)
+    o.bond_feats = copy_2d_diag_reverse(o.bond_feats, Lasu, main_block=main_block)
     
     print('WARNING: repeat prot symmetrization assumes metals only')
     is_metal = o.seq > 21

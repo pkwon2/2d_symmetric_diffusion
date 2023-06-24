@@ -28,6 +28,8 @@ import aa_model
 import parsers
 import matplotlib.pyplot as plt
 
+from icecream import ic 
+ic(util.__file__)
 
 from . import symmetry 
 ###########################################################
@@ -143,10 +145,10 @@ def get_mu_xt_x0(xt, px0, t, beta_schedule, alphabar_schedule, eps=1e-6):
     xt_ca = xt[:,1,:]
     px0_ca = px0[:,1,:]
 
-    a = ((torch.sqrt(alphabar_schedule[t_idx-1] + eps)*beta_schedule[t_idx])/(1-alphabar_schedule[t_idx]))*px0_ca
-    b = ((torch.sqrt(1-beta_schedule[t_idx] + eps)*(1-alphabar_schedule[t_idx-1]))/(1-alphabar_schedule[t_idx]))*xt_ca
+    a = ((torch.sqrt(alphabar_schedule[t_idx-1] + eps)*beta_schedule[t_idx])/(1-alphabar_schedule[t_idx]))
+    b = ((torch.sqrt(1-beta_schedule[t_idx] + eps)*(1-alphabar_schedule[t_idx-1]))/(1-alphabar_schedule[t_idx]))
 
-    mu = a + b
+    mu = a*px0_ca + b*xt_ca
 
     return mu, sigma
 
@@ -726,6 +728,7 @@ class Denoise():
                       align_motif=True,
                       include_motif_sidechains=True,
                       rigid_symm_motif_kwargs={},
+                      rigid_repeat_motif_kwargs={},
                       origin_before_update=False):
         """
         Wrapper function to take px0, xt and t, and to produce xt-1
@@ -801,6 +804,11 @@ class Denoise():
         # rigid-body fitting of motif for symmetry
         if len(rigid_symm_motif_kwargs) > 0:
             frames_next, next_rigid_tmplt = fit_rigid_motif_symm(frames_next, **rigid_symm_motif_kwargs)
+        
+        # rigid-body fitting of motif for repeats
+        elif len(rigid_repeat_motif_kwargs) > 0:
+            print('Getting next frames for repeat motif')
+            frames_next, next_rigid_tmplt = fit_rigid_motif_repeat(frames_next, **rigid_repeat_motif_kwargs)
         else:
             next_rigid_tmplt = None
 
@@ -856,6 +864,7 @@ def fit_rigid_motif_symm(frames_next, motif_mask, xyz_template, symmRs, symmsub,
         """
         xyz_template_clone = xyz_template.clone()
 
+        # a coordinate-based error 
         def dist_error_comp(R0,T0,frames_next_motif,xyz_template,TSCALE):
             template_COM = xyz_template.mean(dim=0)
             template_corr = torch.einsum('ij,rj->ri', R0, xyz_template-template_COM) + template_COM + TSCALE*T0[None,None,:]
@@ -920,6 +929,137 @@ def fit_rigid_motif_symm(frames_next, motif_mask, xyz_template, symmRs, symmsub,
         xyz_template_clone[motif_mask] = updated_template_symm.to(dtype=xyz_template.dtype, device=xyz_template.device)
 
         return frames_next, xyz_template_clone #updated_template[: updated_template.shape[0] // len(symmsub)]
+
+def select_true_regions(tensor):
+    true_regions = []
+    start_idx = None
+
+    for i, value in enumerate(tensor):
+        if value:
+            if start_idx is None:
+                start_idx = i
+        else:
+            if start_idx is not None:
+                true_regions.append((start_idx, i))
+                start_idx = None
+
+    if start_idx is not None:
+        true_regions.append((start_idx, len(tensor)))
+
+    return true_regions
+
+
+def fit_rigid_motif_repeat(frames_next, 
+                           is_motif, 
+                           xyz_template, 
+                           enforce_repeat_fit=False, 
+                           TSCALE=1.0,
+                           fit_optim_steps=12):
+    """
+    Fits motifs rigidly into updated frames
+
+    Parameters:
+    -----------
+
+    frames_next (torch.tensor): updated frames, slightly denoised 
+
+    is_motif (torch.tensor): boolena mask of which residues are motif 
+
+    xyz_template (torch.tensor): current 'templated' coordinates of the motif 
+
+    enforce_repeat (bool): whether to enforce repeat symmetry between pairs of repeats
+
+    TSCALE (float): scale of the translation vector fitted 
+    """
+    xyz_template_clone = xyz_template.clone()
+    
+
+    # Save pdb before fitting 
+    # util.writepdb(f'frames_before_fit.pdb', frames_next, torch.ones(len(is_motif)).long())
+    # util.writepdb(f'template_before_fit.pdb', xyz_template[:,:3], torch.ones(len(is_motif)).long())
+
+    # a coordinate-based error
+    def dist_error_comp(R0,T0,frames_next_motif,xyz_template,TSCALE):
+            template_COM = xyz_template.mean(dim=0)
+            template_corr = torch.einsum('ij,rj->ri', R0, xyz_template-template_COM) + template_COM + TSCALE*T0[None,None,:]
+            loss  = torch.abs(frames_next_motif-template_corr).mean()
+            return loss
+
+
+    def Q2R(Q):
+        Qs = torch.cat((torch.ones((1),device=Q.device),Q),dim=-1)
+        Qs = normQ(Qs)
+        return Qs2Rs(Qs[None,:]).squeeze(0)
+    
+
+    if not enforce_repeat_fit: # allow symmetry breaking between pairs of repeats 
+        # find out where in the motif mask the individual motifs are 
+        # i.e., find where the individual contiguous regions of True are
+        
+        motif_regions = select_true_regions(is_motif) # list of tuples (start_idx, end_idx)
+        ic(motif_regions)
+
+        def closure():
+                lbfgs.zero_grad()
+                loss = dist_error_comp(Q2R(Q0), T0, motif_tgt, motif_tmplt, TSCALE)
+                loss.backward()
+                return loss
+
+        for (start, end) in motif_regions:
+
+            motif_tmplt  = xyz_template[start:end,1,:] # CA of this motif 
+            motif_tmplt_bb = xyz_template[start:end,:3,:] # N, CA, C of this motif
+            motif_tgt = frames_next[start:end,1,:] # CA of the updated (imperfect) motif
+
+            with torch.enable_grad():
+                T0 = torch.zeros(3,device=xyz_template.device).requires_grad_(True)
+                Q0 = torch.zeros(3,device=xyz_template.device).requires_grad_(True)
+            
+            lbfgs = torch.optim.LBFGS([T0,Q0],
+                    history_size=10,
+                    max_iter=4,
+                    line_search_fn="strong_wolfe")
+            
+
+            # fit the motif (ASU) to the updated coordinates
+            motif_tgt = motif_tgt.detach()
+            motif_tmplt = motif_tmplt.detach()
+
+            best_loss = 1e6 
+            same_loss_count = 0
+            # print('Fitting motif ', start, end)
+            for e in range(fit_optim_steps):
+                loss = lbfgs.step(closure)
+                # stop if loss is not improving
+                if loss < best_loss:
+                    best_loss = loss
+                    same_loss_count = 0
+                else:
+                    same_loss_count += 1
+                    if same_loss_count > 3:
+                        break 
+
+            # replace the slightly perturbed motif with the fitted rigid motif
+            com = motif_tmplt.mean(dim=0)
+            updated_motif = torch.einsum('ij,raj->rai', Q2R(Q0), motif_tmplt_bb-com) + com + TSCALE*T0[None,:]
+            updated_motif = updated_motif.detach()
+            
+            # print('Replacing motif in frames next')
+            frames_next[start:end] = updated_motif
+            xyz_template_clone[start:end,:3] = updated_motif.to(dtype=xyz_template.dtype, device=xyz_template.device)
+
+            
+    
+    else:
+        raise NotImplementedError
+    
+    # Save pdb after fitting
+    # ic(frames_next.shape)
+    # ic(xyz_template_clone.shape)
+    # util.writepdb(f'frames_after_fit.pdb', frames_next, torch.ones(len(is_motif)).long())
+    # util.writepdb(f'template_after_fit.pdb', xyz_template_clone[:,:3], torch.ones(len(is_motif)).long())
+    # sys.exit('Debugging')        
+    return frames_next, xyz_template_clone
 
 
 def preprocess(seq, xyz_t, t, T, ppi_design, binderlen, target_res, device):
@@ -1275,8 +1415,6 @@ def process_target(pdb_path, parse_hetatom=False, center=True, inf_conf=None):
             out['subsymm_seq'] = seq_t.reshape(-1)
             out['subsymm_symbol'] = 'C1'
             out['subsymm_axis'] = None
-
-
 
 
         # test reconstruction

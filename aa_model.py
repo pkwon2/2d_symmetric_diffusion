@@ -1,7 +1,7 @@
 import torch
 import assertpy
 import torch.nn.functional as F
-import ipdb
+# import ipdb
 import dataclasses
 from icecream import ic
 from assertpy import assert_that
@@ -373,7 +373,7 @@ class Model:
         return o, is_diffused
 
 
-    def prepro(self, indep, t, is_diffused):
+    def prepro(self, indep, t, is_diffused, twotemplate):
         """
         Function to prepare inputs to diffusion model
         
@@ -396,6 +396,7 @@ class Model:
                 - last plane is block adjacency
         """
         xyz_t = indep.xyz
+        ic(indep.seq)
         seq_one_hot = torch.nn.functional.one_hot(
                 indep.seq, num_classes=self.NTOKENS).float()
         L = seq_one_hot.shape[0]
@@ -517,7 +518,8 @@ class Model:
         alpha_t = torch.cat((alpha, alpha_mask), dim=-1).reshape(-1, L, 3*rf2aa.chemical.NTOTALDOFS) # [n,L,30]
 
         alpha_t = alpha_t.unsqueeze(1) # [n,I,L,30]
-        alpha_t = alpha_t.tile((1,2,1,1)) # add dim for second template 
+        if twotemplate:
+            alpha_t = alpha_t.tile((1,2,1,1)) # add dim for second template 
 
 
 
@@ -552,19 +554,27 @@ class Model:
             t1d=torch.cat((t1d, hotspot_tens[None,None,...,None].to(self.device)), dim=-1)
         
         # return msa_masked, msa_full, seq[None], torch.squeeze(xyz_t, dim=0), idx, t1d, t2d, xyz_t, alpha_t
-        mask_t = torch.ones(1,2,L,L).bool() # 2 for second template
+        if twotemplate:
+            mask_t = torch.ones(1,2,L,L).bool() # 2 for second template
+        else:
+            mask_t = torch.ones(1,1,L,L).bool()
+
         sctors = torch.zeros((1,L,rf2aa.chemical.NTOTALDOFS,2))
 
         xyz = torch.squeeze(xyz_t, dim=0)
 
         # NO SELF COND
-        xyz_t = torch.zeros(1,2,L,3)
-        t2d   = torch.zeros(1,2,L,L,68)
+        if twotemplate:
+            xyz_t = torch.zeros(1,2,L,3)
+            t2d   = torch.zeros(1,2,L,L,68)
 
-        t2d_xt, mask_t_2d_remade = util.get_t2d(
-            xyz, indep.is_sm, indep.atom_frames)
-        t2d[0,0]   = t2d_xt[0]
-        xyz_t[0,0] = xyz[0,:,1]
+            t2d_xt, mask_t_2d_remade = util.get_t2d(
+                xyz, indep.is_sm, indep.atom_frames)
+            t2d[0,0]   = t2d_xt[0]
+            xyz_t[0,0] = xyz[0,:,1]
+        else:
+            xyz_t = torch.zeros(1,1,L,3)
+            t2d   = torch.zeros(1,1,L,L,68)
 
         # ic(
         #     xyz[0, is_diffused][0][:,0], # nan 3:
@@ -591,6 +601,8 @@ class Model:
 
         # minor tweaks to rfi to match gp training
         if ('inference' in self.conf) and (self.conf.inference.get('contig_as_guidepost', False)):
+            print('>'*80)
+            print('Erase N/C termini markers')
             '''Manually inspecting the pickled features passed to RF during training, 
             I did not see markers for the N and C termini. This is to more accurately 
             replicate the features seen during training at inference.'''
@@ -598,8 +610,9 @@ class Model:
             msa_masked[...,-2:] = 0
             msa_full[...,-2:] = 0
 
-        t1d = torch.tile(t1d, (1,2,1,1)) # add dim for second template
-        t1d[0,1,:,-1] = -1
+        if twotemplate:
+            t1d = torch.tile(t1d, (1,2,1,1)) # add dim for second template
+            t1d[0,1,:,-1] = -1
 
         # Note: should be batched
         rfi = RFI(
@@ -846,7 +859,7 @@ def forward(model, rfi, **kwargs):
 def mask_indep(indep, is_diffused):
     indep.seq[is_diffused] = MASKINDEX
 
-def self_cond(indep, rfi, rfo):
+def self_cond(indep, rfi, rfo, twotemplate):
     # RFI is already batched
     B = 1
     L = indep.xyz.shape[0]
@@ -859,10 +872,12 @@ def self_cond(indep, rfi, rfo):
     
     t2d = t2d[None] # Add batch dimension # [B,T,L,L,44]
 
-    # Insert the previous px0 into the SECOND template spot (index 1)
-    # This spot has -1 confidence in t1d, marking it as SC template
-    rfi_sc.xyz_t[0,1] = xyz_t[0,0,:,1]
-    rfi_sc.t2d[0,1] = t2d[0,0]
+    if twotemplate:
+        # Insert the previous px0 into the SECOND template spot (index 1)
+        # This spot has -1 confidence in t1d, marking it as SC template
+        rfi_sc.xyz_t[0,1] = xyz_t[0,0,:,1]
+        rfi_sc.t2d[0,1] = t2d[0,0]
+
     return rfi_sc
 
 

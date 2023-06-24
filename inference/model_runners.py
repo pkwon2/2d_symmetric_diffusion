@@ -292,6 +292,10 @@ class Sampler:
         self.cb_ang = self.cb_ang.to(self.device)
         self.cb_tor = self.cb_tor.to(self.device)
 
+        # other params
+        binder_net = self._conf.inference.two_template
+
+
         # HACK: TODO: save this in the model config
         self.loss_param = {'lj_lin': 0.75}
         model = RoseTTAFoldModule(
@@ -312,15 +316,31 @@ class Sampler:
             cb_tor = self.cb_tor,
             lj_lin=self.loss_param['lj_lin'],
             assert_single_sequence_input=True,
-            ).to(self.device)
+            binder_net=binder_net).to(self.device)
         
         if self._conf.logging.inputs:
             pickle_dir = pickle_function_call(model, 'forward', 'inference', minifier=aa_model.minifier)
             print(f'pickle_dir: {pickle_dir}')
         model = model.eval()
         self._log.info(f'Loading checkpoint.')
+        
+        
+        
         if not self._conf.inference.zero_weights:
-            model.load_state_dict(self.ckpt['model_state_dict'], strict=True)
+            print('*'*80)
+            print('LOADING MODEL WEIGHTS')        
+            # Lenient loading with custom feedback
+            for name, param in model.named_parameters():
+                state_dict = self.ckpt['model_state_dict']
+                if name in state_dict:
+                    param_shape = param.shape
+                    state_shape = state_dict[name].shape
+                    if param_shape != state_shape:
+                        print(f"Model Load Warning: Parameter '{name}' shape mismatch: Model has {param_shape}, State dict has {state_shape}")
+                else:
+                    print(f"Model Load Warning: Parameter '{name}' not found in state dict")
+
+            model.load_state_dict(self.ckpt['model_state_dict'], strict=False)
         return model
 
     def construct_contig(self, target_feats):
@@ -357,6 +377,7 @@ class Sampler:
             xt: Starting positions with a portion of them randomly sampled.
             seq_t: Starting sequence with a portion of them set to unknown.
         """
+        print('Two template option is ', self.inf_conf.two_template)
 
         # moved this here as should be updated each iteration of diffusion
         self.contig_map = self.construct_contig(self.target_feats)
@@ -415,14 +436,32 @@ class Sampler:
             else:
                 # not rigid motif, diffuse all 
                 diffuser_is_diffused = self.is_diffused.clone()
+            
+            self.diffuser_is_diffused = diffuser_is_diffused
+        
+        elif self.inf_conf.rigid_repeat_motif:
+            print('Detected rigid repeat motif args:')
+            print('Forward diffusing non-motif, reverse diffusing all.')
+            # doing rigid drifting motif repeat scaffolding 
+
+            old_is_diffused = is_diffused.clone()
+
+            # denoiser sees everything as diffused (i.e. can move)
+            is_diffused_denoiser = torch.ones_like(is_diffused)
+            self.is_diffused = is_diffused_denoiser
+
+            # need to reset according to new is diffused mask 
+            indep.seq[self.is_diffused] = 21 # set any residues allowed to diffuse to masked
+
+            # diffuser sees the motif as not diffused (i.e. can't move)
+            # just for initialization 
+            diffuser_is_diffused = torch.clone(old_is_diffused)
+            self.diffuser_is_diffused = diffuser_is_diffused
+
         
         else:
             self.is_diffused = is_diffused
             diffuser_is_diffused = self.is_diffused.clone()
-
-        # ic(indep.seq)
-        # ic(rf2aa.chemical.seq2chars(indep.seq))
-        # sys.exit()
 
         atom_mask = None
         seq_one_hot = None
@@ -483,7 +522,7 @@ class Sampler:
             # classic version
             xt, seq_t = self.symmetry.apply_symmetry(indep.xyz, indep.seq)
             
-        
+        # propogates the diffused system symmetrically 
         elif self._conf.inference.internal_sym is not None:
             assert self.symmetry is None, 'Cannot use both new (inference.internal_sym) and classic (inference.symmetry) symmetry simultaneously' 
             # new version, minimal representation of subunits 
@@ -545,25 +584,12 @@ class Sampler:
             else:
                 offset *= (Lasu**(1/3))
 
-            # write pdb before offset 
-            # tmp_outdir = '/home/davidcj/projects/rf_diffusion_allatom/rf_diffusion/experiments/sym_scaffold/debug5/'
-            # fp1 = os.path.join(tmp_outdir, 'indep_crds_before_offset.pdb')
-            # util.writepdb(fp1, indep.xyz[:,:14,:], indep.seq)
-
             # scale offset manually 
             offset *= self._conf.inference.offset_scale 
             indep.xyz[self.is_diffused] = indep.xyz[self.is_diffused] + offset
-            # # write pdb after offset
-            # fp2 = os.path.join(tmp_outdir, 'indep_crds_after_offset.pdb')
-            # util.writepdb(fp2, indep.xyz[:,:14,:], indep.seq)
-
-            # sys.exit('Exiting early') 
             
             # this is the step that duplicates starting coordinates 
             indep, symmsub  = symmetry.find_minimal_neighbors(indep, symmRs, symmeta)
-
-            # indep.write_pdb('./debug_indep_offset_cha_scale3.pdb')
-            # sys.exit('Exiting early')
 
             
             # for passing to RF fwd pass in self.sample_step()
@@ -578,20 +604,16 @@ class Sampler:
             nneigh = len(symmsub)
             self.is_diffused = self.is_diffused.repeat(nneigh) # copy is_diffused for each subunit 
 
-            # write test pdb after symmetrization 
-            # fp3 = os.path.join(tmp_outdir, 'indep_crds_after_symmetrization.pdb')
-            # util.writepdb(fp3, indep.xyz[:,:14,:], indep.seq)
-            # sys.exit('Exiting early after symmetrization')
-
         # repeat proteins
         elif self._conf.model.symmetrize_repeats:
             Lasu     = self._conf.model.repeat_length 
             assert indep.xyz.shape[0] % Lasu == 0, 'Lasu must be a factor of the number of tokens'
 
-            indep = symmetry.propogate_repeat_features(indep, Lasu)
-            self.denoiser.decode_scheduler.visible[indep.is_sm] = True # all sm are visible/not diffused
+            # indep = symmetry.propogate_repeat_features(indep, Lasu, main_block=self._conf.model.main_block)
+            indep = symmetry.propogate_repeat_features2(indep, Lasu, self._conf.inference)
+            # self.denoiser.decode_scheduler.visible[indep.is_sm] = True # all sm are visible/not diffused
 
-
+            self.is_diffused = self.is_diffused.repeat(self._conf.inference.n_repeats)
         
         if return_forward_trajectory:
             forward_traj = torch.cat([xyz_true[None], fa_stack[:,:,:]])
@@ -946,20 +968,22 @@ class NRBStyleSelfCond(Sampler):
             tors_t_1: (L, ?) The updated torsion angles of the next  step.
             plddt: (L, 1) Predicted lDDT of x0.
         '''
-        # for key in vars(indep).keys():
-        #     t  = getattr(indep, key)
-        #     if isinstance(t, torch.Tensor):
-        #         print(key)
-        #         ic(t.shape) 
 
+        twotemplate = self.inf_conf.two_template
         if not self.inf_conf.subsymm_t1d_perfect: 
             # all AA that are diffused (according to contigs) have intermediate confidences
             # even if they are templated in T2D 
-            rfi = self.model_adaptor.prepro(indep, t, self.is_diffused)
+            rfi = self.model_adaptor.prepro(indep, 
+                                            t, 
+                                            self.is_diffused, 
+                                            twotemplate)
         else:
             # Though they are diffused, the AA being templated in T2d will have 
             # perfect confidence, while all else has 1-t/T
-            rfi = self.model_adaptor.prepro(indep, t, self.has_imperfect_t1d)
+            rfi = self.model_adaptor.prepro(indep, 
+                                            t, 
+                                            self.has_imperfect_t1d, 
+                                            twotemplate)
 
         rf2aa.tensor_util.to_device(rfi, self.device)
         seq_init = torch.nn.functional.one_hot(indep.seq, num_classes=rf2aa.chemical.NAATOKENS).to(self.device).float()
@@ -976,7 +1000,7 @@ class NRBStyleSelfCond(Sampler):
             # in the middle of the traj, so self condition on previous px0
             self_cond=True
 
-            rfi = aa_model.self_cond(indep, rfi, rfo)
+            rfi = aa_model.self_cond(indep, rfi, rfo, twotemplate=twotemplate)
             """
             2template self conditioning: 
 
@@ -1077,9 +1101,6 @@ class NRBStyleSelfCond(Sampler):
             idx_pdb = rfi.idx
             idx_pdb, self.chain_idx = self.symmetry.res_idx_procesing(res_idx=idx_pdb)
 
-
-        
-
         # Model Forward
         with torch.no_grad():
             if self.recycle_schedule[t-1] > 1:
@@ -1107,22 +1128,18 @@ class NRBStyleSelfCond(Sampler):
                     print('*'*50+'\n\n')
 
                 with torch.cuda.amp.autocast(True):
-                    # pickle.dump(rfi, open('060723_rfi.pkl','wb'))
-                    # sys.exit('debugging')
                     rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)
                 print('********* SUCCESSFULL MODEL FORWARD *******')
                 self.cur_symmsub = rfo.symmsub
                 
                 # Symmsubs may have changed, so need to update Xt to match model predicted symmsubs
-                xt_asu = rfi.xyz.squeeze(dim=0)[:self.Lasu]
-                cur_Rs = self.symmRs[self.cur_symmsub]
-                s = len(cur_Rs)
-                # xyz_t  = torch.einsum('sji,lai->slaj',cur_Rs.transpose(-1,-2), xyz_t).squeeze()
-                # xyz_t  = xyz_t.reshape(len(cur_Rs)*self.Lasu,natom,3)
-                # updated_xt = torch.einsum('sij,laj->slai', cur_Rs, xt_asu) 
-                updated_xt = torch.einsum('sji,lai->slaj', cur_Rs.transpose(-1,-2), xt_asu)
-                updated_xt = updated_xt.reshape(s*self.Lasu, -1, 3)
-                rfi.xyz = updated_xt.unsqueeze(0)
+                if self.inf_conf.internal_sym is not None:
+                    xt_asu = rfi.xyz.squeeze(dim=0)[:self.Lasu]
+                    cur_Rs = self.symmRs[self.cur_symmsub]
+                    s = len(cur_Rs)
+                    updated_xt = torch.einsum('sji,lai->slaj', cur_Rs.transpose(-1,-2), xt_asu)
+                    updated_xt = updated_xt.reshape(s*self.Lasu, -1, 3)
+                    rfi.xyz = updated_xt.unsqueeze(0)
 
                 if REPORT_MEM:
                     print('MEM REPORT LINE 920 MODEL RUNNERS')
@@ -1150,7 +1167,7 @@ class NRBStyleSelfCond(Sampler):
                         # Allow this model to also do sequence recycling
 
                         t1d[:,:,:,:20] = logits[:,None,:,:20]
-                        t1d[:,:,:,20]  = 0 # Setting mask token to zero
+                        t1d[:,:,:,20]  = 0 # Setting mask tokens to zero
 
         px0         = rfo.get_xyz()[:,:14]
         logits      = rfo.get_seq_logits()
@@ -1189,13 +1206,27 @@ class NRBStyleSelfCond(Sampler):
                                        'motif_mask'     : mask_t,
                                        'symmRs'         : self.symmRs,
                                        'symmsub'        : self.cur_symmsub}
+            rigid_repeat_motif_kwargs = {}
+        
+        # doing rigid repeat motif symm scaffolding
+        elif self._conf.inference.rigid_repeat_motif: 
+            print('ENTERING RIGID REPEAT MOTIF')
+            if self.cur_rigid_tmplt is None: 
+                # keep track of the current rigid motif - in indep[~self.diffuser_is_diffused]
+                self.cur_rigid_tmplt = indep.xyz
+            
+            is_motif = torch.cat([~self.diffuser_is_diffused]*self._conf.inference.n_repeats, dim=0)
+            rigid_repeat_motif_kwargs = {'xyz_template'         : self.cur_rigid_tmplt,
+                                         'is_motif'             : is_motif,
+                                         'enforce_repeat_fit'   : self._conf.inference.enforce_repeat_fit,
+                                         'fit_optim_steps'      : self._conf.inference.rigid_fit_optim_steps}
+            rigid_symm_motif_kwargs = {}
         else:
             rigid_symm_motif_kwargs = {}
+            rigid_repeat_motif_kwargs = {}
 
         
         ### Can also do the repeat protein motif fitting kwargs here 
-        # if self._conf.inference.rigid_repeat_motif:
-        # ... 
         if self._conf.inference.rigid_repeat_motif:
             if self.cur_rigid_tmplt is None: 
                 pass
@@ -1213,6 +1244,7 @@ class NRBStyleSelfCond(Sampler):
                 align_motif=self.inf_conf.align_motif,
                 include_motif_sidechains=self.preprocess_conf.motif_sidechain_input,
                 rigid_symm_motif_kwargs=rigid_symm_motif_kwargs,
+                rigid_repeat_motif_kwargs=rigid_repeat_motif_kwargs,
                 origin_before_update=self._conf.inference.origin_before_update,
             )
             self.cur_rigid_tmplt = cur_rigid_tmplt
