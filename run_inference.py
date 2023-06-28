@@ -28,6 +28,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 import hydra
 import logging
+import copy 
 from util import writepdb_multi, writepdb
 from inference import utils as iu
 from icecream import ic
@@ -38,9 +39,12 @@ import glob
 import inference.model_runners
 import rf2aa.tensor_util
 import rf2aa.util
+from rf2aa.RoseTTAFoldModel import reset_model_attrs
 import aa_model
 import util
 from icecream import ic 
+import json 
+
 # ic.configureOutput(includeContext=True)
 
 def make_deterministic(seed=0):
@@ -52,13 +56,89 @@ def seed_all(seed=0):
     np.random.seed(seed)
     random.seed(seed)
 
+def replace_dict_values(config_dict, replacement_dict):
+    for key, value in replacement_dict.items():
+        # ic(key, value)
+        if key in config_dict:
+            if isinstance(value, dict) and isinstance(config_dict[key], dict):
+                # print('recursing into', key)
+                replace_dict_values(config_dict[key], value)
+            else:
+                # print('replacing', key, 'with', value)
+                config_dict[key] = value
+
+    return config_dict
+
+
+def get_overrides(args, prefix=''):
+    overrides = []
+    for key, value in args.items():
+        if type(value) == dict:
+            overrides += get_overrides(value, prefix + key + '.')
+        else:
+            overrides.append(f'{prefix}{key}={value}')
+    return overrides
+
+
+
 
 @hydra.main(version_base=None, config_path='config/inference', config_name='base')
 def main(conf: HydraConfig) -> None:
-    sampler = get_sampler(conf)
-    sample(sampler)
 
-def get_sampler(conf):
+    orig_conf = copy.deepcopy(conf)
+
+    # unpack potential json args into conf 
+    if conf.inference.json_args: 
+        print('Detected json args, unpacking...')
+        # change conf into dict 
+        dict_conf = OmegaConf.to_container(conf, resolve=True)
+        
+        # load the json into a dict 
+        with open(conf.inference.json_args) as f:
+            json_args = json.load(f)
+            assert isinstance(json_args, list), 'json args must be a list of dicts'
+            assert all(isinstance(x, dict) for x in json_args), 'json args must be a list of dicts'
+        
+    else: 
+        json_args = None
+            
+        
+    if json_args == None:
+        sampler = get_sampler(conf)
+        sample(sampler)
+    
+    else: 
+        # loop over json args 
+        preloaded_ckpts = {}
+        prebuilt_models = {}
+
+        for json_arg in json_args:
+            tmp_dict_conf = copy.deepcopy(dict_conf)
+            tmp_dict_conf = replace_dict_values(tmp_dict_conf, json_arg) # replace args for this run
+            tmp_conf = OmegaConf.create(tmp_dict_conf)
+
+            # mini_conf = OmegaConf.create(json_arg) # fake, just to get overrides and add those to tmp_conf overrides 
+            mini_overrides = get_overrides(json_arg)
+            tmp_conf.inference.overrides = mini_overrides # HACK: to get overrides into assemble_config_from_chk
+
+            # DJ -  repeat/symm specific hack
+            #       There are some arguments in conf that make their way into RF object attributes      
+            #       Luckily, they should all be under the 'model' key in conf, so iterate over those and reset 
+            #       those params in preloaded ckpts 
+            
+            # check for symmetrize_repeats in overrides 
+            if any('symmetrize_repeats' in s for s in mini_overrides):
+                reset_model_attrs(prebuilt_models, json_arg)  
+
+            # get sampler and then sample 
+            sampler = get_sampler(tmp_conf, preloaded_ckpts, prebuilt_models) 
+
+            preloaded_ckpts = sampler.preloaded_ckpts   # __init__ loads ckpts and updates this dict
+            prebuilt_models = sampler.prebuilt_models   # likewise here 
+
+            sample(sampler)
+
+def get_sampler(conf, preloaded_ckpts={}, prebuilt_models={}):
     if conf.inference.deterministic:
         make_deterministic()
      
@@ -77,7 +157,7 @@ def get_sampler(conf):
 
     conf.inference.design_startnum = design_startnum
     # Initialize sampler and target/contig.
-    sampler = inference.model_runners.sampler_selector(conf)
+    sampler = inference.model_runners.sampler_selector(conf, preloaded_ckpts, prebuilt_models)
     return sampler
 
 def sample(sampler):

@@ -20,6 +20,7 @@ import rf2aa.tensor_util
 from rf2aa.Track_module import update_symm_Rs
 import aa_model
 import dataclasses
+import copy 
 
 from kinematics import get_init_xyz
 from diffusion import Diffuser
@@ -54,12 +55,14 @@ REF_ANGLES   = util.reference_angles
 
 class Sampler:
 
-    def __init__(self, conf: DictConfig):
+    def __init__(self, conf: DictConfig, preloaded_ckpts={}, prebuilt_models={}):
         """Initialize sampler.
         Args:
             conf: Configuration.
         """
         self.initialized = False
+        self.preloaded_ckpts = preloaded_ckpts
+        self.prebuilt_models = prebuilt_models
         self.initialize(conf)
     
     def initialize(self, conf: DictConfig):
@@ -68,6 +71,7 @@ class Sampler:
             self.device = torch.device('cuda')
         else:
             self.device = torch.device('cpu')
+        
         needs_model_reload = not self.initialized or conf.inference.ckpt_path != self._conf.inference.ckpt_path
 
         # Assign config to Sampler
@@ -78,10 +82,21 @@ class Sampler:
 
         if needs_model_reload:
             # Load checkpoint, so that we can assemble the config
-            self.load_checkpoint()
-            self.assemble_config_from_chk()
-            # Now actually load the model weights into RF
-            self.model = self.load_model()
+            if self.preloaded_ckpts.get(self.ckpt_path, False):
+                print('******* Using preloaded model for ', self.ckpt_path, ' *********')
+                self.model = self.prebuilt_models[self.ckpt_path]
+                self.ckpt = self.preloaded_ckpts[self.ckpt_path]
+                self.assemble_config_from_chk()
+            else:
+                print('******* Loading model for ', self.ckpt_path, ' from disk *********')
+                self.load_checkpoint()
+                self.assemble_config_from_chk()
+                # Now actually load the model weights into RF
+                self.model = self.load_model()
+
+                # add the model to the prebuilt models
+                self.prebuilt_models[self.ckpt_path] = self.model
+                self.preloaded_ckpts[self.ckpt_path] = self.ckpt  # Now we have access to these in run_inference.py 
         else:
             self.assemble_config_from_chk()
 
@@ -180,6 +195,8 @@ class Sampler:
         recycle_schedule = str(self.inf_conf.recycle_schedule) if self.inf_conf.recycle_schedule is not None else None
         self.recycle_schedule = iu.recycle_schedule(self.T, recycle_schedule, self.inf_conf.num_recycles)
 
+        
+
     def process_target(self, pdb_path):
         assert not (self.inf_conf.ppi_design and self.inf_conf.autogenerate_contigs), "target reprocessing not implemented yet for these configuration arguments"
         self.target_feats = iu.process_target(self.inf_conf.input_pdb)
@@ -224,7 +241,11 @@ class Sampler:
         # get overrides to re-apply after building the config from the checkpoint
         overrides = []
         if HydraConfig.initialized():
-            overrides = HydraConfig.get().overrides.task
+            overrides = list( copy.deepcopy(HydraConfig.get().overrides.task ))
+
+            if self._conf.inference.overrides:
+                overrides.extend(self._conf.inference.overrides)
+
             ic(overrides)
         if 'config_dict' in self.ckpt.keys():
             print("Assembling -model, -diffuser and -preprocess configs from checkpoint")
@@ -607,7 +628,7 @@ class Sampler:
         # repeat proteins
         elif self._conf.model.symmetrize_repeats:
             Lasu     = self._conf.model.repeat_length 
-            assert indep.xyz.shape[0] % Lasu == 0, 'Lasu must be a factor of the number of tokens'
+            assert indep.xyz.shape[0] % Lasu == 0, 'Lasu must be a factor of the number of tokens but found %d and %d' % (Lasu, indep.xyz.shape[0])
 
             # indep = symmetry.propogate_repeat_features(indep, Lasu, main_block=self._conf.model.main_block)
             indep = symmetry.propogate_repeat_features2(indep, Lasu, self._conf.inference)
@@ -1219,7 +1240,8 @@ class NRBStyleSelfCond(Sampler):
             rigid_repeat_motif_kwargs = {'xyz_template'         : self.cur_rigid_tmplt,
                                          'is_motif'             : is_motif,
                                          'enforce_repeat_fit'   : self._conf.inference.enforce_repeat_fit,
-                                         'fit_optim_steps'      : self._conf.inference.rigid_fit_optim_steps}
+                                         'fit_optim_steps'      : self._conf.inference.rigid_fit_optim_steps,
+                                         'repeat_length'        : self._conf.model.repeat_length}
             rigid_symm_motif_kwargs = {}
         else:
             rigid_symm_motif_kwargs = {}
@@ -1280,7 +1302,7 @@ class NRBStyleSelfCond(Sampler):
 
         return px0, x_t_1, seq_t_1, tors_t_1, None, rfo
 
-def sampler_selector(conf: DictConfig):
+def sampler_selector(conf: DictConfig, preloaded_ckpts={}, preloaded_models={}):
     if conf.inference.model_runner == 'default':
         sampler = Sampler(conf)
     elif conf.inference.model_runner == 'legacy':
@@ -1290,7 +1312,7 @@ def sampler_selector(conf: DictConfig):
     elif conf.inference.model_runner == 'JWStyleSelfCond':
         sampler = JWStyleSelfCond(conf)
     elif conf.inference.model_runner == 'NRBStyleSelfCond':
-        sampler = NRBStyleSelfCond(conf)
+        sampler = NRBStyleSelfCond(conf, preloaded_ckpts, preloaded_models)
     else:
         raise ValueError(f'Unrecognized sampler {conf.model_runner}')
     return sampler

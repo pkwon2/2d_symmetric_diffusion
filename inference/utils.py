@@ -930,9 +930,28 @@ def fit_rigid_motif_symm(frames_next, motif_mask, xyz_template, symmRs, symmsub,
 
         return frames_next, xyz_template_clone #updated_template[: updated_template.shape[0] // len(symmsub)]
 
-def select_true_regions(tensor):
+# def select_true_regions(tensor):
+#     true_regions = []
+#     start_idx = None
+
+#     for i, value in enumerate(tensor):
+#         if value:
+#             if start_idx is None:
+#                 start_idx = i
+#         else:
+#             if start_idx is not None:
+#                 true_regions.append((start_idx, i))
+#                 start_idx = None
+
+#     if start_idx is not None:
+#         true_regions.append((start_idx, len(tensor)))
+
+#     return true_regions
+
+def get_grouped_regions(tensor, repeat_length):
     true_regions = []
     start_idx = None
+    prev_group = None
 
     for i, value in enumerate(tensor):
         if value:
@@ -940,18 +959,78 @@ def select_true_regions(tensor):
                 start_idx = i
         else:
             if start_idx is not None:
-                true_regions.append((start_idx, i))
+                end_idx = i
+                group = (start_idx // repeat_length, end_idx // repeat_length)
+                if group != prev_group:
+                    true_regions.append([])
+                true_regions[-1].append((start_idx, end_idx))
                 start_idx = None
+                prev_group = group
 
     if start_idx is not None:
-        true_regions.append((start_idx, len(tensor)))
+        end_idx = len(tensor)
+        group = (start_idx // repeat_length, end_idx // repeat_length)
+        if group != prev_group:
+            true_regions.append([])
+        true_regions[-1].append((start_idx, end_idx))
 
     return true_regions
+
+def select_true_regions(tensor, repeat_length):
+    """
+    returns list of masks 
+    """
+    assert len(tensor) % repeat_length == 0
+    nmasks = len(tensor) // repeat_length
+
+    masks = []
+    for i in range(nmasks):
+        mask = torch.clone(tensor)
+        # set any not in this chunk to False 
+        cur_start = i * repeat_length
+        cur_end = ((i+1) * repeat_length )
+        mask[:cur_start]   = False
+        mask[(cur_end):] = False
+        masks.append(mask)
+    
+    return masks
+
+
+# def select_true_regions2(tensor, repeat_length):
+#     true_regions = []
+#     start_idx = None
+#     prev_group = None
+
+#     for i, value in enumerate(tensor):
+#         if value:
+#             if start_idx is None:
+#                 start_idx = i
+#         else:
+#             if start_idx is not None:
+#                 end_idx = i
+#                 group = (start_idx // repeat_length, end_idx // repeat_length)
+#                 if group != prev_group:
+#                     true_regions.append([False] * len(tensor))
+#                 true_regions[-1][start_idx:end_idx] = [True] * (end_idx - start_idx)
+#                 start_idx = None
+#                 prev_group = group
+
+#     if start_idx is not None:
+#         end_idx = len(tensor)
+#         group = (start_idx // repeat_length, end_idx // repeat_length)
+#         if group != prev_group:
+#             true_regions.append([False] * len(tensor))
+#         true_regions[-1][start_idx:end_idx] = [True] * (end_idx - start_idx)
+
+#     return true_regions
+
+
 
 
 def fit_rigid_motif_repeat(frames_next, 
                            is_motif, 
                            xyz_template, 
+                           repeat_length,
                            enforce_repeat_fit=False, 
                            TSCALE=1.0,
                            fit_optim_steps=12):
@@ -996,8 +1075,10 @@ def fit_rigid_motif_repeat(frames_next,
         # find out where in the motif mask the individual motifs are 
         # i.e., find where the individual contiguous regions of True are
         
-        motif_regions = select_true_regions(is_motif) # list of tuples (start_idx, end_idx)
+        motif_regions = get_grouped_regions(is_motif, repeat_length) # list of tuples (start_idx, end_idx)
+        motif_masks = select_true_regions(is_motif, repeat_length) # list of masks (True/False)
         ic(motif_regions)
+
 
         def closure():
                 lbfgs.zero_grad()
@@ -1005,11 +1086,16 @@ def fit_rigid_motif_repeat(frames_next,
                 loss.backward()
                 return loss
 
-        for (start, end) in motif_regions:
+        for cur_is_motif in motif_masks:
 
-            motif_tmplt  = xyz_template[start:end,1,:] # CA of this motif 
-            motif_tmplt_bb = xyz_template[start:end,:3,:] # N, CA, C of this motif
-            motif_tgt = frames_next[start:end,1,:] # CA of the updated (imperfect) motif
+            # motif_tmplt  = xyz_template[start:end,1,:] # CA of this motif 
+            # motif_tmplt_bb = xyz_template[start:end,:3,:] # N, CA, C of this motif
+            # motif_tgt = frames_next[start:end,1,:] # CA of the updated (imperfect) motif
+
+            # now use boolean mask 
+            motif_tmplt  = xyz_template_clone[cur_is_motif,1,:] # CA of this motif
+            motif_tmplt_bb = xyz_template_clone[cur_is_motif,:3,:] # N, CA, C of this motif
+            motif_tgt = frames_next[cur_is_motif,1,:] # CA of the updated (imperfect) motif
 
             with torch.enable_grad():
                 T0 = torch.zeros(3,device=xyz_template.device).requires_grad_(True)
@@ -1045,8 +1131,12 @@ def fit_rigid_motif_repeat(frames_next,
             updated_motif = updated_motif.detach()
             
             # print('Replacing motif in frames next')
-            frames_next[start:end] = updated_motif
-            xyz_template_clone[start:end,:3] = updated_motif.to(dtype=xyz_template.dtype, device=xyz_template.device)
+            # frames_next[start:end] = updated_motif
+            # xyz_template_clone[start:end,:3] = updated_motif.to(dtype=xyz_template.dtype, device=xyz_template.device)
+            # using boolean mask
+            frames_next[cur_is_motif] = updated_motif.to(dtype=frames_next.dtype, device=frames_next.device)
+            xyz_template_clone[cur_is_motif,:3] = updated_motif.to(dtype=xyz_template.dtype, device=xyz_template.device)
+
 
             
     

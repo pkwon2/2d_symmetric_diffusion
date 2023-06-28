@@ -52,6 +52,8 @@ inference:
   two_template: False 
   enforce_repeat_fit: False 
   rigid_fit_optim_steps: 12
+  json_args: null 
+  overrides: null 
 
 
 contigmap:
