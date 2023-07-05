@@ -486,7 +486,11 @@ class Sampler:
 
         atom_mask = None
         seq_one_hot = None
-        center_crds = not (self._conf.inference.internal_sym is not None) # don't center coords if doing symmetry
+        # center_crds = not (self._conf.inference.internal_sym is not None) # don't center coords if doing symmetry
+        center_crds = True # DJ- new version centers the particle at origin
+
+        if self._conf.inference.internal_sym is not None:
+            symmids, symmRs, symmeta, offset = symmetry.get_pointsym_meta(self._conf.inference.internal_sym)
 
         if not self.inf_conf.start_from_input:
             fa_stack, aa_masks, xyz_true = self.diffuser.diffuse_pose(
@@ -498,7 +502,8 @@ class Sampler:
                 t_list=t_list,
                 diffuse_sidechains=self.preprocess_conf.sidechain_input,
                 include_motif_sidechains=self.preprocess_conf.motif_sidechain_input,
-                center_crds=center_crds)
+                center_crds=center_crds,
+                symmRs=symmRs)
             
             xT = fa_stack[-1].squeeze()[:,:14,:]
             xt = torch.clone(xT)
@@ -548,7 +553,7 @@ class Sampler:
             assert self.symmetry is None, 'Cannot use both new (inference.internal_sym) and classic (inference.symmetry) symmetry simultaneously' 
             # new version, minimal representation of subunits 
             # find rotation matrices/metadata for symmetry 
-            symmids, symmRs, symmeta, offset = symmetry.get_pointsym_meta(self._conf.inference.internal_sym)
+            # symmids, symmRs, symmeta, offset = symmetry.get_pointsym_meta(self._conf.inference.internal_sym) # dj - moved this to above
 
             # if partial_T, offset should be directly opposite of the vector from 
             # the center of mass to the axis of symmetry 
@@ -570,31 +575,33 @@ class Sampler:
                 offset = motif_com / norm
 
             # Check if C2/3/5 template going into I -- if True, offset in direction of first chain in template 
-            cond_a = self.inf_conf.subsymm_template is not None
-            cond_b = self._conf.inference.internal_sym.lower() in ['i','icos','icosahedral']
-            cond_c = self.target_feats['subsymm_symbol'].lower() in ['c2','c3','c5']
-            if cond_a and cond_b and cond_c:
-                print('Detected C2/3/5 template going into I symmetry, offset is in the direction of the first chain in the template')
-                offset = None 
-                
-                # Offset combins two things
-                # 1. offset toward center of mass of first chain in template
-                # 2. offset away from origin in the direction of sym ax of subsymm template
+            if self.inf_conf.subsymm_template is not None:
+                cond_a = self.inf_conf.subsymm_template is not None
+                cond_b = self._conf.inference.internal_sym.lower() in ['i','icos','icosahedral']
+                cond_c = self.target_feats['subsymm_symbol'].lower() in ['c2','c3','c5']
 
-                # (1)
-                tmplt_xyz    = self.target_feats['subsymm_xyz']
-                tmplt_lasu   = self.target_feats['subsymm_lasu']
-                tmplt_xyz_A  = tmplt_xyz[:tmplt_lasu] # first chain of template
-                com_A        = torch.mean(tmplt_xyz_A[:,1], dim=0)
-                offset_chA   = com_A / torch.norm(com_A, dim=-1, keepdim=True)
+                if cond_a and cond_b and cond_c:
+                    print('Detected C2/3/5 template going into I symmetry, offset is in the direction of the first chain in the template')
+                    offset = None 
+                    
+                    # Offset combins two things
+                    # 1. offset toward center of mass of first chain in template
+                    # 2. offset away from origin in the direction of sym ax of subsymm template
 
-                # (2)
-                MAGIC_AXIS_OFFSET_SCALE = 3
-                tmplt_axis   = self.target_feats['subsymm_axis']
-                offset_tmplt = tmplt_axis / torch.norm(tmplt_axis, dim=-1) * MAGIC_AXIS_OFFSET_SCALE
+                    # (1)
+                    tmplt_xyz    = self.target_feats['subsymm_xyz']
+                    tmplt_lasu   = self.target_feats['subsymm_lasu']
+                    tmplt_xyz_A  = tmplt_xyz[:tmplt_lasu] # first chain of template
+                    com_A        = torch.mean(tmplt_xyz_A[:,1], dim=0)
+                    offset_chA   = com_A / torch.norm(com_A, dim=-1, keepdim=True)
 
-                # combine
-                offset = offset_chA + offset_tmplt
+                    # (2)
+                    MAGIC_AXIS_OFFSET_SCALE = 3
+                    tmplt_axis   = self.target_feats['subsymm_axis']
+                    offset_tmplt = tmplt_axis / torch.norm(tmplt_axis, dim=-1) * MAGIC_AXIS_OFFSET_SCALE
+
+                    # combine
+                    offset = offset_chA + offset_tmplt
 
 
             # scale offset w.r.t ASU length 
@@ -1147,6 +1154,15 @@ class NRBStyleSelfCond(Sampler):
                     print('MEM REPORT LINE 916 model runners')
                     mem_report() 
                     print('*'*50+'\n\n')
+
+                # debugging 
+                # tmp_out = vars(rfi)
+                # for key in tmp_out.keys():
+                #     if torch.is_tensor(tmp_out[key]):
+                #         tmp_out[key] = tmp_out[key].cpu().numpy()
+                # with open('rfi_yes_motif_nosymm.pkl','wb') as f:
+                #     pickle.dump(tmp_out,f)
+                # sys.exit('Exiting for debugging')
 
                 with torch.cuda.amp.autocast(True):
                     rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)

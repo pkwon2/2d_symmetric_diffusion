@@ -24,6 +24,7 @@ from chemical import INIT_CRDS
 import igso3
 import time 
 
+import sys
 from icecream import ic  
 
 import rf2aa.chemical
@@ -892,7 +893,7 @@ class Diffuser():
 
         print('Successful diffuser __init__')
     
-    def diffuse_pose(self, xyz, seq, atom_mask, is_sm, diffuse_sidechains=False, include_motif_sidechains=True, diffusion_mask=None, t_list=None, center_crds=True):
+    def diffuse_pose(self, xyz, seq, atom_mask, is_sm, diffuse_sidechains=False, include_motif_sidechains=True, diffusion_mask=None, t_list=None, center_crds=True, symmRs=None):
         """
         Given full atom xyz, sequence and atom mask, diffuse the protein 
         translations, rotations, and chi angles
@@ -923,16 +924,36 @@ class Diffuser():
         nan_mask = ~torch.isnan(xyz.squeeze()[:,1:2]).any(dim=-1).any(dim=-1)
         assert torch.sum(~nan_mask) == 0
 
-        #Centre unmasked structure at origin, as in training (to prevent information leak)
-        if torch.sum(diffusion_mask) != 0:
-            self.motif_com=xyz[diffusion_mask,1,:].mean(dim=0) # This is needed for one of the potentials
+        
+        if symmRs is None: # asymmetric case
+
+            #Centre unmasked structure at origin, as in training (to prevent information leak)
+            if torch.sum(diffusion_mask) != 0:
+                self.motif_com=xyz[diffusion_mask,1,:].mean(dim=0) # This is needed for one of the potentials
+                if center_crds:
+                    xyz = xyz - self.motif_com
+                else:
+                    print('WARNING: NOT CENTERING STRUCTURE AT ORIGIN')
+            elif torch.sum(diffusion_mask) == 0:
+                if center_crds:
+                    xyz = xyz - xyz[:,1,:].mean(dim=0)
+                else:
+                    print('WARNING: NOT CENTERING STRUCTURE AT ORIGIN')
+
+        else: # symmetric case
+
+            # build entire particle and center at origin
+            s = symmRs.shape[0]
+            l = xyz.shape[0]
+
+            xyz_full = torch.einsum('sij,laj->slai',symmRs,xyz)
+            xyz_full = xyz_full.reshape(s*l,-1,3)
+            ic(xyz_full.shape)
+            diff_mask_repeat = diffusion_mask.repeat(len(symmRs))
+
+            self.motif_com = xyz_full[diff_mask_repeat,1,:].mean(dim=0)
             if center_crds:
                 xyz = xyz - self.motif_com
-            else:
-                print('WARNING: NOT CENTERING STRUCTURE AT ORIGIN')
-        elif torch.sum(diffusion_mask) == 0:
-            if center_crds:
-                xyz = xyz - xyz[:,1,:].mean(dim=0)
             else:
                 print('WARNING: NOT CENTERING STRUCTURE AT ORIGIN')
 
