@@ -115,6 +115,7 @@ model:
   symm_fit_start: -1
   clash: 4.0
   lock_symmsubs_at: -1
+  allow_particle_recenter: false 
 
 diffuser:
   T: 200

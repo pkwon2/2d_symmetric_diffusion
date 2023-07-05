@@ -267,7 +267,12 @@ class Sampler:
                 if override.split(".")[0] in ['model','diffuser','seq_diffuser','preprocess']:
                     print(f'WARNING: You are changing {override.split("=")[0]} from the value this model was trained with. Are you sure you know what you are doing?') 
                     mytype = type(self._conf[override.split(".")[0]][override.split(".")[1].split("=")[0]])
-                    self._conf[override.split(".")[0]][override.split(".")[1].split("=")[0]] = mytype(override.split("=")[1])
+                    
+                    if mytype == bool: 
+                        # special treatment for bools because they are strings in override 
+                        self._conf[override.split(".")[0]][override.split(".")[1].split("=")[0]] = override.split("=")[1].lower().strip() == 'true'
+                    else:
+                        self._conf[override.split(".")[0]][override.split(".")[1].split("=")[0]] = mytype(override.split("=")[1])
         else:
             print('WARNING: Model, Diffuser and Preprocess parameters are not saved in this checkpoint. Check carefully that the values specified in the config are correct for this checkpoint')     
 
@@ -1303,7 +1308,7 @@ class NRBStyleSelfCond(Sampler):
 
             # x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs, fit_symm=False).squeeze(0)
             if symmsub.shape[0] > 1:
-                x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs).squeeze(0)
+                x_t_1 = update_symm_Rs(x_t_1.to(self.symmRs.device)[None], self.Lasu, symmsub, self.symmRs, recenter_particle=self._conf.model.allow_particle_recenter).squeeze(0)
 
         px0 = px0.cpu()
         x_t_1 = x_t_1.cpu()
