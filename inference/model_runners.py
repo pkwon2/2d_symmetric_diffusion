@@ -496,6 +496,8 @@ class Sampler:
 
         if self._conf.inference.internal_sym is not None:
             symmids, symmRs, symmeta, offset = symmetry.get_pointsym_meta(self._conf.inference.internal_sym)
+        else:
+            symmids, symmRs, symmeta, offset = None, None, None, None
 
         if not self.inf_conf.start_from_input:
             fa_stack, aa_masks, xyz_true = self.diffuser.diffuse_pose(
