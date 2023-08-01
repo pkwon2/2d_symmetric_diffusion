@@ -62,6 +62,7 @@ C_TERMINUS = 2
 class Indep:
     seq: torch.Tensor # [L]
     xyz: torch.Tensor # [L, 36?, 3]
+    xyz2: torch.Tensor # DJ new - three template
     idx: torch.Tensor
 
     # SM specific
@@ -270,6 +271,7 @@ class Model:
         indep = Indep(
             seq,
             xyz,
+            xyz, # DJ -- three template, dummy xyz for now 
             idx_pdb,
             # SM specific
             bond_feats,
@@ -369,34 +371,42 @@ class Model:
 
         # To see the shapes of the indep struct with contig inserted
         # print(rf2aa.tensor_util.info(rf2aa.tensor_util.to_ordered_dict(o)))
-        ic(o.xyz.shape)
+        o.xyz2 = o.xyz.clone() # DJ - three template, dummy xyz for now
+
         return o, is_diffused
 
 
-    def prepro(self, indep, t, is_diffused, twotemplate):
+    def prepro(self, 
+               indep, 
+               t, 
+               is_diffused, 
+               twotemplate, 
+               threetemplate, 
+               is_protein_motif=None, 
+               t2d_is_revealed=None):
         """
         Function to prepare inputs to diffusion model
         
-            seq (L,22) one-hot sequence 
+        Parameters:
 
-            msa_masked (1,1,L,48)
+        indep: Indep dataclass
 
-            msa_full (1,1,L,25)
-        
-            xyz_t (L,14,3) template crds (diffused) 
+            if doing (twotempalte and threetemplate), then indep.xyz2 is the third template and two things are required:
+                (1) is_protein_motif must correspond to the indep.xyz2
+                (2) t2d_is_revealed must correspond to the indep.xyz2, showing which i,j can see each other
 
-            t1d (1,L,28) this is the t1d before tacking on the chi angles:
-                - seq + unknown/mask (21)
-                - global timestep (1-t/T if not motif else 1) (1)
-                - contacting residues: for ppi. Target residues in contact with biner (1)
-                - chi_angle timestep (1)
-                - ss (H, E, L, MASK) (4)
-            
-            t2d (1, L, L, 45)
-                - last plane is block adjacency
+        ... 
+
+        two_template (bool): whether to use two templates or not
+
+        three_template (bool): whether to use three templates or not
+
+        is_protein_motif (torch.Tensor): whether residue is a motif or not 
+
+        t2d_is_revealed (torch.Tensor): boolean mask marking which i,j pairs can see each other in the 3rd template 
         """
+
         xyz_t = indep.xyz
-        ic(indep.seq)
         seq_one_hot = torch.nn.functional.one_hot(
                 indep.seq, num_classes=self.NTOKENS).float()
         L = seq_one_hot.shape[0]
@@ -518,8 +528,13 @@ class Model:
         alpha_t = torch.cat((alpha, alpha_mask), dim=-1).reshape(-1, L, 3*rf2aa.chemical.NTOTALDOFS) # [n,L,30]
 
         alpha_t = alpha_t.unsqueeze(1) # [n,I,L,30]
-        if twotemplate:
+        
+        if twotemplate and (not threetemplate):
             alpha_t = alpha_t.tile((1,2,1,1)) # add dim for second template 
+        elif twotemplate and threetemplate:
+            alpha_t = alpha_t.tile((1,3,1,1))
+        else:
+            pass 
 
 
 
@@ -554,8 +569,10 @@ class Model:
             t1d=torch.cat((t1d, hotspot_tens[None,None,...,None].to(self.device)), dim=-1)
         
         # return msa_masked, msa_full, seq[None], torch.squeeze(xyz_t, dim=0), idx, t1d, t2d, xyz_t, alpha_t
-        if twotemplate:
+        if twotemplate and not threetemplate:
             mask_t = torch.ones(1,2,L,L).bool() # 2 for second template
+        elif twotemplate and threetemplate:
+            mask_t = torch.ones(1,3,L,L).bool()
         else:
             mask_t = torch.ones(1,1,L,L).bool()
 
@@ -564,7 +581,7 @@ class Model:
         xyz = torch.squeeze(xyz_t, dim=0)
 
         # NO SELF COND
-        if twotemplate:
+        if twotemplate and (not threetemplate):
             xyz_t = torch.zeros(1,2,L,3)
             t2d   = torch.zeros(1,2,L,L,68)
 
@@ -572,17 +589,56 @@ class Model:
                 xyz, indep.is_sm, indep.atom_frames)
             t2d[0,0]   = t2d_xt[0]
             xyz_t[0,0] = xyz[0,:,1]
+        
+        elif twotemplate and threetemplate:
+            assert (is_protein_motif is not None) 
+            assert (t2d_is_revealed is not None)
+
+            # only inputting motif in 2d template --> need 3rd template 
+            xyz_t  = torch.zeros(1,3,L,3)
+            t2d    = torch.zeros(1,3,L,L,68)
+            mask_t = torch.ones(1,3,L,L).bool()
+
+            ##### 2nd template #####
+            t2d_xt, mask_t_2d_remade = util.get_t2d(xyz, indep.is_sm, indep.atom_frames)
+            t2d[0,0]   = t2d_xt[0]
+            xyz_t[0,0] = xyz[0,:,1]
+
+            ##### 3rd template #####
+            # set of diffused crds w/ motif sliced in
+            xyz_xt_w_motif = xyz.clone()
+            xyz_xt_w_motif[0,is_protein_motif,:NHEAVYPROT] = indep.xyz2[is_protein_motif]
+
+            # t2d containing desired motif 
+            # this construction uses bool mask to allow certain motifs to see others
+            # all motifs can see themselves
+            t2d_motif, _ = util.get_t2d(xyz_xt_w_motif, indep.is_sm, indep.atom_frames, t2d_is_revealed[None])
+
+
+            # put it in as third template
+            t2d[0,2] = t2d_motif[0]
+            xyz_t[0,2] = xyz_xt_w_motif[0,:,1]
+            # stack on final feature 
+            blank = torch.ones_like(t2d_is_revealed)*-1 # first two templates will have -1 in this channel
+            cattable_t2d_is_revealed = torch.stack((blank, blank, t2d_is_revealed.int()), dim=-1)
+            cattable_t2d_is_revealed = cattable_t2d_is_revealed.permute(2,0,1) # (L,L,3) -> (3,L,L)
+            cattable_t2d_is_revealed = cattable_t2d_is_revealed[None,...,None] # (3,L,L) -> (1,3,L,L,1)
+
+            t2d = torch.cat((t2d, cattable_t2d_is_revealed), dim=-1)    # (1,3,L,L,69)
+
+
+
         else:
             xyz_t = torch.zeros(1,1,L,3)
             t2d   = torch.zeros(1,1,L,L,68)
 
-        # ic(
-        #     xyz[0, is_diffused][0][:,0], # nan 3:
-        #     xyz[0, indep.is_sm][0][:,0], # nan 14:
-        #     xyz[0, ~is_diffused * ~indep.is_sm][0][:,0], # nan 14:
-        # )
 
-        is_protein_motif = ~is_diffused * ~indep.is_sm
+
+        if is_protein_motif is None:
+            # DJ - adding this bc if motif_only_t2, is_diffused will be 
+            # entire protein --> can't trust it to calculate is_protein_motif
+            is_protein_motif = ~is_diffused * ~indep.is_sm
+
         # idx_diffused = torch.nonzero(is_diffused)
         # idx_protein_motif  = torch.nonzero(is_protein_motif)
         # idx_sm = torch.nonzero(indep.is_sm)
@@ -610,9 +666,21 @@ class Model:
             msa_masked[...,-2:] = 0
             msa_full[...,-2:] = 0
 
-        if twotemplate:
+
+        ### T1D ### 
+        if twotemplate and (not threetemplate):
             t1d = torch.tile(t1d, (1,2,1,1)) # add dim for second template
             t1d[0,1,:,-1] = -1
+        
+        elif twotemplate and threetemplate:  # new "3 template" t1d - has extra feature 
+            t1d = torch.tile(t1d, (1,3,1,1))
+            t1d[0,1,:,-1] = -1 # second template (Xt) gets -1 for timestep feature 
+            t1d[0,2,:,-1] = -1 # third template (motif) gets -1 for timestep feature
+
+            # feature for 3rd template - is it motif or not?
+            cattable_is_protein_motif = torch.tile(is_protein_motif[None,None,:,None], (1,3,1,1)).to(device=t1d.device, dtype=t1d.dtype)
+            cattable_is_protein_motif[:,:-1,...] = -1  # first two templates get -1 for the motif feature 
+            t1d = torch.cat((t1d, cattable_is_protein_motif), dim=-1) 
 
         # Note: should be batched
         rfi = RFI(
@@ -859,7 +927,7 @@ def forward(model, rfi, **kwargs):
 def mask_indep(indep, is_diffused):
     indep.seq[is_diffused] = MASKINDEX
 
-def self_cond(indep, rfi, rfo, twotemplate):
+def self_cond(indep, rfi, rfo, twotemplate, threetemplate):
     # RFI is already batched
     B = 1
     L = indep.xyz.shape[0]
@@ -872,11 +940,22 @@ def self_cond(indep, rfi, rfo, twotemplate):
     
     t2d = t2d[None] # Add batch dimension # [B,T,L,L,44]
 
-    if twotemplate:
+    if twotemplate and (not threetemplate):
         # Insert the previous px0 into the SECOND template spot (index 1)
         # This spot has -1 confidence in t1d, marking it as SC template
         rfi_sc.xyz_t[0,1] = xyz_t[0,0,:,1]
         rfi_sc.t2d[0,1] = t2d[0,0]
+
+    elif twotemplate and threetemplate:
+        rfi_sc.xyz_t[0,1] = xyz_t[0,0,:,1]
+
+        # add 69th feature to t2d (accomodation for 3-template version)
+        blank = (torch.ones((1,1,L,L,1))*-1).to(rfi.xyz.device)
+        t2d = torch.cat((t2d, blank), dim=-1)
+        rfi_sc.t2d[0, 1] = t2d[0, 0]
+    
+    else:
+        raise RuntimeError('Unsure what should happen here - re-evaluate when hit. -DJ')
 
     return rfi_sc
 

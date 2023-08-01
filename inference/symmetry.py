@@ -1461,10 +1461,11 @@ def propogate_repeat_features2(indep, Lasu, inf_conf):
     orig_xyz = o.xyz.squeeze()
     newcrds = []
     for i in range(Ncopy):
-        new = orig_xyz + MAGIC_OFFSET * (i+1) * torch.tensor([1,0,0])
+        new = orig_xyz + MAGIC_OFFSET * (i) * torch.tensor([1,0,0]) # offset in x direction, arbitrarily
         newcrds.append(new)
     newcrds = torch.cat(newcrds, dim=0)
     o.xyz = newcrds
+    o.xyz2 = newcrds.clone() # for 3rd template
     
     o.seq           = torch.cat([o.seq[None]]*Ncopy, dim=1).squeeze(0)
     o.atom_frames   = torch.cat([o.atom_frames[None]]*Ncopy,dim=1).squeeze(0)

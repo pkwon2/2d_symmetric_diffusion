@@ -50,10 +50,12 @@ inference:
   n_repeats: 3
   origin_before_update: False
   two_template: False 
+  three_template: False
   enforce_repeat_fit: False 
   rigid_fit_optim_steps: 12
   json_args: null 
   overrides: null 
+  ij_visible: null
 
 
 contigmap:
@@ -70,6 +72,8 @@ model:
   d_msa_full: 64
   d_pair: 128
   d_templ: 64
+  d_templ_1d: null
+  d_templ_2d: null
   n_head_msa: 8
   n_head_pair: 4
   n_head_templ: 4

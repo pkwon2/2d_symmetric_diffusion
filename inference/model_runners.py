@@ -499,6 +499,7 @@ class Sampler:
         else:
             symmids, symmRs, symmeta, offset = None, None, None, None
 
+        print('symmRs is ', symmRs)
         if not self.inf_conf.start_from_input:
             fa_stack, aa_masks, xyz_true = self.diffuser.diffuse_pose(
                 indep.xyz,
@@ -982,11 +983,154 @@ class Sampler:
         px0_sym,_ = self.symmetry.apply_symmetry(px0_aa.to('cpu').squeeze()[:,:14], torch.argmax(seq_in, dim=-1).squeeze().to('cpu'))
         px0_sym = px0_sym[None].to(self.device)
         return px0_sym
+    
+def find_breaks(ix, thresh=1):
+    # finds positions in ix where the jump is greater than thresh
+    breaks = np.where(np.diff(ix) > thresh)[0]
+    return np.array(breaks)+1
+
+
+def get_breaks(a, cut=1):
+    # finds indices where jumps in a occur
+    assert len(a.shape) == 1 # must be 1D array
+
+     
+    if torch.is_tensor(a):
+        diff = torch.abs( torch.diff(a) )
+        breaks = torch.where(diff > cut)[0]
+    
+    else:
+        diff = np.abs( np.diff(a) )
+        breaks = np.where(diff > cut)[0]
+
+    return breaks
+
+
+def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat):
+    """
+    Given contig map and motif chunks that can see each other, create t2d mask
+    defining which motif chunks can see each other. 
+
+    Parameters:
+    -----------
+    L (int): total length of protein being modelled
+    
+    con_ref_idx0 (torch.tensor): tensor containing zero-indexed indices of where motif chunks are 
+                                 going to be placed in the output protein.
+
+    ij_is_visible (list): List of tuples, each tuple defines a set of motif chunks that can see each other.
+
+    nrepeat (int): Number of repeat units in repeat protein being modelled 
+    """
+    assert all([type(x) == tuple for x in ij_is_visible]), 'ij_is_visible must be list of tuples'
+    assert L%nrepeat == 0
+    Lasu = L // nrepeat
+
+    # (1) Define matrix where each row/col is a motif chunk, entries are 1 if motif chunks can see each other
+    #     and 0 otherwise.
+    breaks = get_breaks(con_hal_idx0)
+    nchunk = len(breaks) + 1
+    nchunk_total = nchunk * nrepeat
+
+    
+    # initially empty
+    chunk_ij_visible = torch.eye(nchunk_total)
+    # fill in user-defined visibility
+    for S in ij_is_visible:
+        for i in S:
+            for j in S: 
+                if i == j:
+                    continue # already visible bc eye 
+                chunk_ij_visible[i,j] = 1
+                chunk_ij_visible[j,i] = 1
+
+
+    # (2) Fill in LxL matrix with coarse mask info
+    con_hal_idx0_full = torch.cat([con_hal_idx0 + i*Lasu for i in range(nrepeat)])
+    mask2d = torch.zeros(L, L)
+
+    # make 1D array designating which chunks are motif
+    is_motif = torch.zeros(L)
+    is_motif[con_hal_idx0_full] = 1 
+    breaks2 = get_breaks(is_motif, cut=0.5) # transitions 1-->0 and 0-->1
+    group_by_pairs = lambda lst: [lst[i:i+2] for i in range(0, len(lst), 2)]
+    # breaks2 is a list of (start,end) (inclusive) indices of motif chunks, in order of appearance in design
+    breaks2 = group_by_pairs(breaks2)
+
+    # fill in 2d mask
+    for i in range(len(breaks2)):
+        for j in range(len(breaks2)):
+
+            visible = chunk_ij_visible[i,j] 
+
+            if visible: 
+                start_i, end_i = breaks2[i]
+                start_j, end_j = breaks2[j]
+                mask2d[start_i:end_i, start_j:end_j] = 1
+                mask2d[start_j:end_j, start_i:end_i] = 1
+
+
+    return mask2d, is_motif
+
+
+
 
 class NRBStyleSelfCond(Sampler):
     """
     Model Runner for self conditioning in the style attempted by NRB
     """
+    def _get_3template_masks(self, indep):
+        """
+        Gets is_protein_motif and t2d_is_revealed for 3template inference
+        """
+        assert self._conf.model.symmetrize_repeats, 'assumes repeat protein inferences for now'
+        con_hal_idx0 = self.contigmap.get_mappings()['con_hal_idx0']
+
+        ### is_protein_motif ###
+        ########################
+        if self._conf.inference.motif_only_2d: 
+            # the entire protein is diffused
+            # trying to reconstruct motif from 2d only 
+            is_protein_motif = ~indep.is_sm * self.is_diffused
+    
+        else: 
+            # non-motif is diffused, motif given in 3d  
+            is_protein_motif = ~indep.is_sm * self.diffuser_is_diffused
+
+        ### t2d_is_revealed ###
+        #######################
+        abet = 'abcdefghijklmnopqrstuvwxyz'
+        abet = [a for a in abet]
+        abet2num = {a:i for i,a in enumerate(abet)} 
+
+        L = len(is_protein_motif)
+
+        ij_visible = self._conf.inference.ij_visible # which chunks can see each other 
+        assert ij_visible is not None
+        ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
+        ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
+         
+        
+        n_repeat = 3; print('WARNING: ASSUMING 3-repeat protein')
+        assert L%n_repeat == 0, 'L must be a multiple of n_repeat'
+        Lasu = L//n_repeat 
+
+        ## check that the user-specified ij_visible is valid
+        unique_letters = set([a for a in ij_visible.join('')] )
+        max_letter = max([abet2num[a] for a in unique_letters]) # e.g., 5 for abcde
+        contig_motif_breaks = get_breaks(con_hal_idx0, thresh=1)
+        nbreaks = len(contig_motif_breaks)
+        n_motif_contig = (nbreaks+1)*n_repeat # total number of motif chunks 
+        # cannot have more user specified motif chunks than exist in contigs 
+        assert max_letter <= n_motif_contig, 'user specified number of motif chunks > number calculated from contigs using {} repeats'.format(n_repeat)
+
+
+        # create a mask of which chunks are visible to each other compatible with contigs/con_hal_idx0
+        mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, n_repeat)
+
+
+        return is_protein_motif, mask_t2d
+    
 
     def sample_step(self, t, indep, rfo):
         '''
@@ -1004,21 +1148,35 @@ class NRBStyleSelfCond(Sampler):
             plddt: (L, 1) Predicted lDDT of x0.
         '''
 
-        twotemplate = self.inf_conf.two_template
+        twotemplate   = self.inf_conf.two_template
+        threetemplate = self.inf_conf.three_template
+
+        if (twotemplate and threetemplate):
+            is_protein_motif, t2d_is_revealed = self._get_3template_masks(indep)
+        else:
+            is_protein_motif, t2d_is_revealed = None,None 
+
         if not self.inf_conf.subsymm_t1d_perfect: 
             # all AA that are diffused (according to contigs) have intermediate confidences
             # even if they are templated in T2D 
             rfi = self.model_adaptor.prepro(indep, 
                                             t, 
                                             self.is_diffused, 
-                                            twotemplate)
+                                            twotemplate,
+                                            threetemplate,
+                                            is_protein_motif=is_protein_motif, 
+                                            t2d_is_revealed=t2d_is_revealed)
         else:
             # Though they are diffused, the AA being templated in T2d will have 
             # perfect confidence, while all else has 1-t/T
+            raise Exception('Not a good option, results were poor.')
             rfi = self.model_adaptor.prepro(indep, 
                                             t, 
                                             self.has_imperfect_t1d, 
-                                            twotemplate)
+                                            twotemplate,
+                                            threetemplate,
+                                            is_protein_motif=is_protein_motif, 
+                                            t2d_is_revealed=t2d_is_revealed)
 
         rf2aa.tensor_util.to_device(rfi, self.device)
         seq_init = torch.nn.functional.one_hot(indep.seq, num_classes=rf2aa.chemical.NAATOKENS).to(self.device).float()
@@ -1035,7 +1193,7 @@ class NRBStyleSelfCond(Sampler):
             # in the middle of the traj, so self condition on previous px0
             self_cond=True
 
-            rfi = aa_model.self_cond(indep, rfi, rfo, twotemplate=twotemplate)
+            rfi = aa_model.self_cond(indep, rfi, rfo, twotemplate=twotemplate, threetemplate=threetemplate)
             """
             2template self conditioning: 
 
@@ -1066,7 +1224,7 @@ class NRBStyleSelfCond(Sampler):
             con_hal_idx0 = self.contig_map.get_mappings()['con_hal_idx0']
             # single chain embedded into zeros according to contigs 
             xyz_t[con_hal_idx0]  = xyz_subsymm[con_ref_idx0].to(self.device)
-            mask_t[con_hal_idx0] = True 
+            mask_t[con_hal_idx0] = True
 
             # now get xyz_t for current subsymm/Rs being modelled 
             cur_Rs = self.symmRs[self.cur_symmsub]
