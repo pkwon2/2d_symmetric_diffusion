@@ -405,6 +405,8 @@ class Model:
 
         t2d_is_revealed (torch.Tensor): boolean mask marking which i,j pairs can see each other in the 3rd template 
         """
+        ic(twotemplate)
+        ic(threetemplate)
 
         xyz_t = indep.xyz
         seq_one_hot = torch.nn.functional.one_hot(
@@ -616,8 +618,29 @@ class Model:
 
 
             # put it in as third template
-            t2d[0,2] = t2d_motif[0]
+            t2d[0,2]   = t2d_motif[0]
             xyz_t[0,2] = xyz_xt_w_motif[0,:,1]
+
+            # fig, ax = plt.subplots(2,2,figsize=(5,5), dpi=300)
+
+            # ax[0][0].imshow(t2d[0,0].argmax(-1))
+            # ax[0][0].set_title('First template - Xt in')
+
+            # ax[0][1].imshow(t2d[0,1].argmax(-1))
+            # ax[0][1].set_title('Second template - self cond')
+
+            # ax[1][0].imshow(t2d[0,2].argmax(-1))
+            # ax[1][0].set_title('Third template - motif ')
+
+            # ax[1][1].imshow(t2d_is_revealed)
+            # ax[1][1].set_title('Third template motif mask')
+            
+            # plt.tight_layout()
+            # plt.show()
+            # plt.savefig('repeat_motif_t2d_lantahnide.png', bbox_inches='tight', dpi='figure')
+            # sys.exit('Exiting early')
+
+
             # stack on final feature 
             blank = torch.ones_like(t2d_is_revealed)*-1 # first two templates will have -1 in this channel
             cattable_t2d_is_revealed = torch.stack((blank, blank, t2d_is_revealed.int()), dim=-1)

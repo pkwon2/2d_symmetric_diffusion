@@ -56,6 +56,7 @@ inference:
   json_args: null 
   overrides: null 
   ij_visible: null
+  motif_only_2d: False
 
 
 contigmap:

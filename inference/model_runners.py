@@ -20,7 +20,9 @@ import rf2aa.tensor_util
 from rf2aa.Track_module import update_symm_Rs
 import aa_model
 import dataclasses
-import copy 
+import copy
+
+from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
 from kinematics import get_init_xyz
 from diffusion import Diffuser
@@ -499,7 +501,6 @@ class Sampler:
         else:
             symmids, symmRs, symmeta, offset = None, None, None, None
 
-        print('symmRs is ', symmRs)
         if not self.inf_conf.start_from_input:
             fa_stack, aa_masks, xyz_true = self.diffuser.diffuse_pose(
                 indep.xyz,
@@ -1074,7 +1075,6 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat):
 
 
 
-
 class NRBStyleSelfCond(Sampler):
     """
     Model Runner for self conditioning in the style attempted by NRB
@@ -1084,7 +1084,7 @@ class NRBStyleSelfCond(Sampler):
         Gets is_protein_motif and t2d_is_revealed for 3template inference
         """
         assert self._conf.model.symmetrize_repeats, 'assumes repeat protein inferences for now'
-        con_hal_idx0 = self.contigmap.get_mappings()['con_hal_idx0']
+        con_hal_idx0 = torch.from_numpy( self.contig_map.get_mappings()['con_hal_idx0'] )
 
         ### is_protein_motif ###
         ########################
@@ -1095,7 +1095,7 @@ class NRBStyleSelfCond(Sampler):
     
         else: 
             # non-motif is diffused, motif given in 3d  
-            is_protein_motif = ~indep.is_sm * self.diffuser_is_diffused
+            is_protein_motif = ~indep.is_sm * ~self.diffuser_is_diffused.repeat(self._conf.inference.n_repeats)
 
         ### t2d_is_revealed ###
         #######################
@@ -1109,18 +1109,18 @@ class NRBStyleSelfCond(Sampler):
         assert ij_visible is not None
         ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
         ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
-         
+        ic(ij_visible_int)
         
         n_repeat = 3; print('WARNING: ASSUMING 3-repeat protein')
         assert L%n_repeat == 0, 'L must be a multiple of n_repeat'
         Lasu = L//n_repeat 
 
         ## check that the user-specified ij_visible is valid
-        unique_letters = set([a for a in ij_visible.join('')] )
-        max_letter = max([abet2num[a] for a in unique_letters]) # e.g., 5 for abcde
-        contig_motif_breaks = get_breaks(con_hal_idx0, thresh=1)
-        nbreaks = len(contig_motif_breaks)
-        n_motif_contig = (nbreaks+1)*n_repeat # total number of motif chunks 
+        unique_letters      = set([a for a in ''.join(ij_visible)] )
+        max_letter          = max([abet2num[a] for a in unique_letters]) # e.g., 5 for abcde
+        contig_motif_breaks = get_breaks(con_hal_idx0, cut=1)
+        nbreaks             = len(contig_motif_breaks)
+        n_motif_contig      = (nbreaks+1)*n_repeat # total number of motif chunks 
         # cannot have more user specified motif chunks than exist in contigs 
         assert max_letter <= n_motif_contig, 'user specified number of motif chunks > number calculated from contigs using {} repeats'.format(n_repeat)
 
