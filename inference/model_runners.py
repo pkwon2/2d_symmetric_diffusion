@@ -486,6 +486,18 @@ class Sampler:
             diffuser_is_diffused = torch.clone(old_is_diffused)
             self.diffuser_is_diffused = diffuser_is_diffused
 
+        elif self.inf_conf.motif_only_2d:
+            print('Detected motif only 2d option')
+            print('Foward/reverse diffuse everything.')
+
+            # denoiser sees all as being reverse diffused
+            is_diffused_denoiser = torch.ones_like(is_diffused)
+            self.is_diffused = is_diffused_denoiser
+            indep.seq[self.is_diffused] = 21
+            
+            # diffuser will also diffuse everything
+            diffuser_is_diffused = torch.clone(is_diffused_denoiser)
+            self.diffuser_is_diffused = diffuser_is_diffused
         
         else:
             self.is_diffused = is_diffused
@@ -1006,6 +1018,26 @@ def get_breaks(a, cut=1):
 
     return breaks
 
+def find_true_chunks_indices(tensor):
+    # chat gpt algorithm 
+    true_indices = torch.nonzero(tensor).flatten().tolist()
+    chunks = []
+    
+    if not true_indices:
+        return chunks
+    
+    start = true_indices[0]
+    prev = true_indices[0]
+    
+    for idx in true_indices[1:]:
+        if idx != prev + 1:
+            chunks.append((start, prev))
+            start = idx
+        prev = idx
+    
+    chunks.append((start, prev))
+    return chunks
+
 
 def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat):
     """
@@ -1053,10 +1085,7 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat):
     # make 1D array designating which chunks are motif
     is_motif = torch.zeros(L)
     is_motif[con_hal_idx0_full] = 1 
-    breaks2 = get_breaks(is_motif, cut=0.5) # transitions 1-->0 and 0-->1
-    group_by_pairs = lambda lst: [lst[i:i+2] for i in range(0, len(lst), 2)]
-    # breaks2 is a list of (start,end) (inclusive) indices of motif chunks, in order of appearance in design
-    breaks2 = group_by_pairs(breaks2)
+    breaks2 = find_true_chunks_indices(is_motif)
 
     # fill in 2d mask
     for i in range(len(breaks2)):
@@ -1083,50 +1112,64 @@ class NRBStyleSelfCond(Sampler):
         """
         Gets is_protein_motif and t2d_is_revealed for 3template inference
         """
-        assert self._conf.model.symmetrize_repeats, 'assumes repeat protein inferences for now'
         con_hal_idx0 = torch.from_numpy( self.contig_map.get_mappings()['con_hal_idx0'] )
 
         ### is_protein_motif ###
         ########################
+        abet = 'abcdefghijklmnopqrstuvwxyz'
+        abet = [a for a in abet]
+        abet2num = {a:i for i,a in enumerate(abet)} 
+        
         if self._conf.inference.motif_only_2d: 
             # the entire protein is diffused
             # trying to reconstruct motif from 2d only 
             is_protein_motif = ~indep.is_sm * self.is_diffused
+
+            # t2d_is_revealed
+            L = len(is_protein_motif)
+            mask_t2d = torch.zeros((L,L))
+
+            # User can use ij_visible argument
+            ij_visible = self._conf.inference.ij_visible
+            assert ij_visible is not None, '3 template + motif_only_2d requires description of motif pairwise visibility'
+            ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
+            ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
+
+            ic(ij_visible_int)
+            assert not self._conf.model.symmetrize_repeats, 'assuming non-repeat design for now'
+            mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, 1)
     
         else: 
             # non-motif is diffused, motif given in 3d  
+            assert self._conf.model.symmetrize_repeats, 'assumes repeat protein inferences for now'
             is_protein_motif = ~indep.is_sm * ~self.diffuser_is_diffused.repeat(self._conf.inference.n_repeats)
 
-        ### t2d_is_revealed ###
-        #######################
-        abet = 'abcdefghijklmnopqrstuvwxyz'
-        abet = [a for a in abet]
-        abet2num = {a:i for i,a in enumerate(abet)} 
+            ### t2d_is_revealed ###
+            #######################
 
-        L = len(is_protein_motif)
+            L = len(is_protein_motif)
 
-        ij_visible = self._conf.inference.ij_visible # which chunks can see each other 
-        assert ij_visible is not None
-        ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
-        ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
-        ic(ij_visible_int)
-        
-        n_repeat = 3; print('WARNING: ASSUMING 3-repeat protein')
-        assert L%n_repeat == 0, 'L must be a multiple of n_repeat'
-        Lasu = L//n_repeat 
+            ij_visible = self._conf.inference.ij_visible # which chunks can see each other 
+            assert ij_visible is not None
+            ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
+            ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
+            
+            n_repeat = 3; print('WARNING: ASSUMING 3-repeat protein')
+            assert L%n_repeat == 0, 'L must be a multiple of n_repeat'
+            Lasu = L//n_repeat 
 
-        ## check that the user-specified ij_visible is valid
-        unique_letters      = set([a for a in ''.join(ij_visible)] )
-        max_letter          = max([abet2num[a] for a in unique_letters]) # e.g., 5 for abcde
-        contig_motif_breaks = get_breaks(con_hal_idx0, cut=1)
-        nbreaks             = len(contig_motif_breaks)
-        n_motif_contig      = (nbreaks+1)*n_repeat # total number of motif chunks 
-        # cannot have more user specified motif chunks than exist in contigs 
-        assert max_letter <= n_motif_contig, 'user specified number of motif chunks > number calculated from contigs using {} repeats'.format(n_repeat)
+            ## check that the user-specified ij_visible is valid
+            unique_letters      = set([a for a in ''.join(ij_visible)] )
+            max_letter          = max([abet2num[a] for a in unique_letters]) # e.g., 5 for abcde
+            contig_motif_breaks = get_breaks(con_hal_idx0, cut=1)
+            nbreaks             = len(contig_motif_breaks)
+            n_motif_contig      = (nbreaks+1)*n_repeat # total number of motif chunks 
+            # cannot have more user specified motif chunks than exist in contigs 
+            assert max_letter <= n_motif_contig, 'user specified number of motif chunks > number calculated from contigs using {} repeats'.format(n_repeat)
 
 
-        # create a mask of which chunks are visible to each other compatible with contigs/con_hal_idx0
-        mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, n_repeat)
+            # create a mask of which chunks are visible to each other compatible with contigs/con_hal_idx0
+            mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, n_repeat)
 
 
         return is_protein_motif, mask_t2d

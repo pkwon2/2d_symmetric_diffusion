@@ -609,7 +609,7 @@ class Model:
             ##### 3rd template #####
             # set of diffused crds w/ motif sliced in
             xyz_xt_w_motif = xyz.clone()
-            xyz_xt_w_motif[0,is_protein_motif,:NHEAVYPROT] = indep.xyz2[is_protein_motif]
+            xyz_xt_w_motif[0,is_protein_motif,:NHEAVYPROT] = indep.xyz2[is_protein_motif,:NHEAVYPROT]
 
             # t2d containing desired motif 
             # this construction uses bool mask to allow certain motifs to see others
