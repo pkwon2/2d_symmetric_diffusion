@@ -271,7 +271,7 @@ class Model:
         indep = Indep(
             seq,
             xyz,
-            xyz, # DJ -- three template, dummy xyz for now 
+            xyz.clone(), # DJ -- three template, dummy xyz for now 
             idx_pdb,
             # SM specific
             bond_feats,
@@ -405,8 +405,6 @@ class Model:
 
         t2d_is_revealed (torch.Tensor): boolean mask marking which i,j pairs can see each other in the 3rd template 
         """
-        ic(twotemplate)
-        ic(threetemplate)
 
         xyz_t = indep.xyz
         seq_one_hot = torch.nn.functional.one_hot(
@@ -637,7 +635,7 @@ class Model:
             
             # plt.tight_layout()
             # plt.show()
-            # plt.savefig('repeat_motif_t2d_lantahnide.png', bbox_inches='tight', dpi='figure')
+            # plt.savefig('repeat_DBP_t2d.png', bbox_inches='tight', dpi='figure')
             # sys.exit('Exiting early')
 
 

@@ -1465,7 +1465,10 @@ def propogate_repeat_features2(indep, Lasu, inf_conf):
         newcrds.append(new)
     newcrds = torch.cat(newcrds, dim=0)
     o.xyz = newcrds
-    o.xyz2 = newcrds.clone() # for 3rd template
+
+    # o.xyz2 = newcrds.clone() # for 3rd template
+    orig_xyz2 = o.xyz2.squeeze().clone() 
+    o.xyz2 = orig_xyz2.repeat(Ncopy,1,1)
     
     o.seq           = torch.cat([o.seq[None]]*Ncopy, dim=1).squeeze(0)
     o.atom_frames   = torch.cat([o.atom_frames[None]]*Ncopy,dim=1).squeeze(0)

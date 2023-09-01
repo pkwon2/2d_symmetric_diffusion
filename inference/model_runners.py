@@ -248,7 +248,6 @@ class Sampler:
             if self._conf.inference.overrides:
                 overrides.extend(self._conf.inference.overrides)
 
-            ic(overrides)
         if 'config_dict' in self.ckpt.keys():
             print("Assembling -model, -diffuser and -preprocess configs from checkpoint")
 
@@ -405,8 +404,6 @@ class Sampler:
             xt: Starting positions with a portion of them randomly sampled.
             seq_t: Starting sequence with a portion of them set to unknown.
         """
-        print('Two template option is ', self.inf_conf.two_template)
-
         # moved this here as should be updated each iteration of diffusion
         self.contig_map = self.construct_contig(self.target_feats)
 
@@ -423,9 +420,7 @@ class Sampler:
         
         
         self.is_diffused = is_diffused
-        
-        # if self.diffuser_conf.partial_T:
-        #     # raise Exception('not implemented')
+
 
         # Diffuse the contig-mapped coordinates 
         if self.diffuser_conf.partial_T:
@@ -489,6 +484,10 @@ class Sampler:
         elif self.inf_conf.motif_only_2d:
             print('Detected motif only 2d option')
             print('Foward/reverse diffuse everything.')
+            assert self._conf.inference.two_template and self._conf.inference.three_template
+
+            self.is_diffused_orig = is_diffused.clone() # keep this for later 
+
 
             # denoiser sees all as being reverse diffused
             is_diffused_denoiser = torch.ones_like(is_diffused)
@@ -498,6 +497,9 @@ class Sampler:
             # diffuser will also diffuse everything
             diffuser_is_diffused = torch.clone(is_diffused_denoiser)
             self.diffuser_is_diffused = diffuser_is_diffused
+
+
+            
         
         else:
             self.is_diffused = is_diffused
@@ -663,6 +665,7 @@ class Sampler:
             # self.denoiser.decode_scheduler.visible[indep.is_sm] = True # all sm are visible/not diffused
 
             self.is_diffused = self.is_diffused.repeat(self._conf.inference.n_repeats)
+            self.is_diffused_orig = self.is_diffused_orig.repeat(self._conf.inference.n_repeats)
         
         if return_forward_trajectory:
             forward_traj = torch.cat([xyz_true[None], fa_stack[:,:,:]])
@@ -1096,11 +1099,43 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat):
             if visible: 
                 start_i, end_i = breaks2[i]
                 start_j, end_j = breaks2[j]
-                mask2d[start_i:end_i, start_j:end_j] = 1
-                mask2d[start_j:end_j, start_i:end_i] = 1
+                mask2d[start_i:end_i+1, start_j:end_j+1] = 1
+                mask2d[start_j:end_j+1, start_i:end_i+1] = 1
 
 
     return mask2d, is_motif
+
+def parse_ij_get_repeat_mask(ij_visible, L, n_repeat, con_hal_idx0):
+    """
+    Helper function for getting repeat protein mask 2d info
+    """
+
+    abet = 'abcdefghijklmnopqrstuvwxyz'
+    abet = [a for a in abet]
+    abet2num = {a:i for i,a in enumerate(abet)}
+
+    # ij_visible = self._conf.inference.ij_visible # which chunks can see each other 
+    assert ij_visible is not None
+    ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
+    ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
+
+    assert L%n_repeat == 0, 'L must be a multiple of n_repeat'
+    Lasu = L//n_repeat 
+
+    ## check that the user-specified ij_visible is valid
+    unique_letters      = set([a for a in ''.join(ij_visible)] )
+    max_letter          = max([abet2num[a] for a in unique_letters]) # e.g., 5 for abcde
+    contig_motif_breaks = get_breaks(con_hal_idx0, cut=1)
+    nbreaks             = len(contig_motif_breaks)
+    n_motif_contig      = (nbreaks+1)*n_repeat # total number of motif chunks 
+    # cannot have more user specified motif chunks than exist in contigs 
+    assert max_letter <= n_motif_contig, 'user specified number of motif chunks > number calculated from contigs using {} repeats'.format(n_repeat)
+
+
+    # create a mask of which chunks are visible to each other compatible with contigs/con_hal_idx0
+    mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, n_repeat)
+
+    return mask_t2d
 
 
 
@@ -1123,53 +1158,40 @@ class NRBStyleSelfCond(Sampler):
         if self._conf.inference.motif_only_2d: 
             # the entire protein is diffused
             # trying to reconstruct motif from 2d only 
-            is_protein_motif = ~indep.is_sm * self.is_diffused
 
-            # t2d_is_revealed
-            L = len(is_protein_motif)
-            mask_t2d = torch.zeros((L,L))
+            if not self._conf.model.symmetrize_repeats:
+                # asymmetric case 
+                is_protein_motif = ~indep.is_sm * self.is_diffused_orig
 
-            # User can use ij_visible argument
-            ij_visible = self._conf.inference.ij_visible
-            assert ij_visible is not None, '3 template + motif_only_2d requires description of motif pairwise visibility'
-            ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
-            ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
+                # t2d_is_revealed
+                L = len(is_protein_motif)
+                mask_t2d = torch.zeros((L,L))
 
-            ic(ij_visible_int)
-            assert not self._conf.model.symmetrize_repeats, 'assuming non-repeat design for now'
-            mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, 1)
-    
+                # User can use ij_visible argument
+                ij_visible = self._conf.inference.ij_visible
+                assert ij_visible is not None, '3 template + motif_only_2d requires description of motif pairwise visibility'
+                ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
+                ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
+
+                mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, 1)
+            else: 
+                assert type(self._conf.inference.n_repeats) is int        # must be present 
+                is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig  # should be appropriate length 
+
+                ### t2d_is_revealed ###
+                n_repeat = self._conf.inference.n_repeats
+                L = len(is_protein_motif)
+                mask_t2d = parse_ij_get_repeat_mask(self._conf.inference.ij_visible, L, n_repeat, con_hal_idx0)
+
         else: 
             # non-motif is diffused, motif given in 3d  
             assert self._conf.model.symmetrize_repeats, 'assumes repeat protein inferences for now'
             is_protein_motif = ~indep.is_sm * ~self.diffuser_is_diffused.repeat(self._conf.inference.n_repeats)
 
             ### t2d_is_revealed ###
-            #######################
-
+            n_repeat = self._conf.inference.n_repeats
             L = len(is_protein_motif)
-
-            ij_visible = self._conf.inference.ij_visible # which chunks can see each other 
-            assert ij_visible is not None
-            ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
-            ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
-            
-            n_repeat = 3; print('WARNING: ASSUMING 3-repeat protein')
-            assert L%n_repeat == 0, 'L must be a multiple of n_repeat'
-            Lasu = L//n_repeat 
-
-            ## check that the user-specified ij_visible is valid
-            unique_letters      = set([a for a in ''.join(ij_visible)] )
-            max_letter          = max([abet2num[a] for a in unique_letters]) # e.g., 5 for abcde
-            contig_motif_breaks = get_breaks(con_hal_idx0, cut=1)
-            nbreaks             = len(contig_motif_breaks)
-            n_motif_contig      = (nbreaks+1)*n_repeat # total number of motif chunks 
-            # cannot have more user specified motif chunks than exist in contigs 
-            assert max_letter <= n_motif_contig, 'user specified number of motif chunks > number calculated from contigs using {} repeats'.format(n_repeat)
-
-
-            # create a mask of which chunks are visible to each other compatible with contigs/con_hal_idx0
-            mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, n_repeat)
+            mask_t2d = parse_ij_get_repeat_mask(self._conf.inference.ij_visible, L, n_repeat, con_hal_idx0)
 
 
         return is_protein_motif, mask_t2d
@@ -1236,7 +1258,11 @@ class NRBStyleSelfCond(Sampler):
             # in the middle of the traj, so self condition on previous px0
             self_cond=True
 
-            rfi = aa_model.self_cond(indep, rfi, rfo, twotemplate=twotemplate, threetemplate=threetemplate)
+            rfi = aa_model.self_cond(indep, 
+                                     rfi, 
+                                     rfo, 
+                                     twotemplate=twotemplate, 
+                                     threetemplate=threetemplate)
             """
             2template self conditioning: 
 
@@ -1251,7 +1277,6 @@ class NRBStyleSelfCond(Sampler):
         # if exists, slice in the t2d from subsym template 
         if self.inf_conf.subsymm_template is not None:
             mask_t_2d_subsymm = indep.mask_t_2d_subsymm
-            # xyz_subsymm       = indep.subsymm_xyz
             xyz_subsymm = self.target_feats['subsymm_xyz']
             
             # translate subsym along sym axis if not C1 to ensure correct 
@@ -1368,7 +1393,7 @@ class NRBStyleSelfCond(Sampler):
                 # for key in tmp_out.keys():
                 #     if torch.is_tensor(tmp_out[key]):
                 #         tmp_out[key] = tmp_out[key].cpu().numpy()
-                # with open('rfi_yes_motif_nosymm.pkl','wb') as f:
+                # with open('rfi_yesrepeat_DBP_bugfixed.pkl','wb') as f:
                 #     pickle.dump(tmp_out,f)
                 # sys.exit('Exiting for debugging')
 
