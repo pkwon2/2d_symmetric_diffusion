@@ -1161,7 +1161,7 @@ class NRBStyleSelfCond(Sampler):
 
             if not self._conf.model.symmetrize_repeats:
                 # asymmetric case 
-                is_protein_motif = ~indep.is_sm * self.is_diffused_orig
+                is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig
 
                 # t2d_is_revealed
                 L = len(is_protein_motif)
