@@ -25,6 +25,7 @@ import itertools
 import random
 from typing import Optional 
 from rf2aa.util_module import XYZConverter
+import rotation_conversions
 
 
 NINDEL=1
@@ -1239,3 +1240,38 @@ class AtomizeResidues:
 
     def return_input_tensors(self):
         return self.indep, self.masks_1d
+
+
+def eye_frames(xyz, _assert=False):
+    L, _, _ = xyz.shape
+
+    # find the R that would yield ID matrix when combined w/ current frames 
+    R_orig, _ = util.rigid_from_3_points(xyz[None,:,0,:], xyz[None,:,1,:], xyz[None,:,2,:])
+    R_orig = R_orig[0] # (L,3,3)
+    R_inv = R_orig.transpose(-1,-2)
+
+    # apply R_inv to current frames such that they now have ID Rs 
+    ca = xyz[:,1:2,:]
+    rotated = torch.einsum('lab,lib->lia', R_inv, xyz - ca) + ca
+
+    if _assert:
+        # make sure it worked 
+        R_new, _ = util.rigid_from_3_points(rotated[None,:,0,:], rotated[None,:,1,:], rotated[None,:,2,:])
+        R_new = R_new[0] # (L,3,3)
+
+        eye = torch.eye(3, dtype=R_new.dtype, device=R_new.device).unsqueeze(0).expand(L,3,3)
+
+        is_close = torch.tensor([torch.allclose(R_new[i], eye[i], atol=1e-5) for i in range(L)])
+        assert is_close.all()
+
+    return rotated
+
+
+def randomly_rotate_frames(xyz):
+    L, _, _ = xyz.shape
+    R_rand = rotation_conversions.random_rotations(L, dtype=xyz.dtype)
+    frame_origins = xyz[:,1:2,:]
+    xyz_centered = xyz - frame_origins
+    rotated = torch.einsum('lab,lib->...lia', R_rand, xyz_centered)
+    rotated += frame_origins
+    return rotated

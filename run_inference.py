@@ -271,6 +271,12 @@ def sample_one(sampler, simple_logging=False):
                 if t%10 == 0:
                     e = t
                 print(f'{e}', end='')
+
+            if sampler._conf.preprocess.eye_frames:
+                indep.xyz = aa_model.eye_frames(indep.xyz)
+            elif sampler._conf.preprocess.randomize_frames:
+                indep.xyz = aa_model.randomize_frames(indep.xyz)
+                
             px0, x_t, seq_t, tors_t, plddt, rfo = sampler.sample_step(t, indep, rfo)
 
             # assert_that(indep.xyz.shape).is_equal_to(x_t.shape)

@@ -180,6 +180,8 @@ preprocess:
   str_self_cond: False
   seq_self_cond: False
   predict_previous: False
+  eye_frames: False 
+  randomize_frames: False
   
 logging:
   inputs: False
