@@ -1241,6 +1241,29 @@ class AtomizeResidues:
     def return_input_tensors(self):
         return self.indep, self.masks_1d
 
+def eye_frames2(xyz, center=False):
+    """
+    replaces frames in xyz with identity frames, this version simply using chemical.INIT_CRDS as frame.
+    """
+    L, _, _ = xyz.shape
+
+    orig_xyz = xyz.clone()
+
+    T = xyz[:,1,:] # CA coords
+
+    init = chemical.INIT_CRDS[:3] # (3,3)
+    init = init[None].expand(L,3,3) # (L,3,3), replaces N,CA,C such that frame is identity
+
+    xyz[:,:3,:] = init+T[:,None,:].expand(L,3,3) # expand second dim to match n,ca,c
+
+    assert torch.allclose(xyz[:,1,:], orig_xyz[:,1,:])
+
+    if center:
+        xyz = xyz - xyz[:,1:2,:].mean(dim=0, keepdim=True)
+
+
+    return xyz
+
 
 def eye_frames(xyz, _assert=False):
     L, _, _ = xyz.shape

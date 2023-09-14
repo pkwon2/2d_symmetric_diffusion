@@ -272,9 +272,13 @@ def sample_one(sampler, simple_logging=False):
                     e = t
                 print(f'{e}', end='')
 
+
+            # replace frames 
             if sampler._conf.preprocess.eye_frames:
-                indep.xyz = aa_model.eye_frames(indep.xyz)
+                print('WARNING: replacing all frames with EYE regardless of motif/nonmotif')
+                indep.xyz = aa_model.eye_frames2(indep.xyz, center=True) # 
             elif sampler._conf.preprocess.randomize_frames:
+                print('WARNING: replacing all frames with RANDOM regardless of motif/nonmotif')
                 indep.xyz = aa_model.randomize_frames(indep.xyz)
                 
             px0, x_t, seq_t, tors_t, plddt, rfo = sampler.sample_step(t, indep, rfo)

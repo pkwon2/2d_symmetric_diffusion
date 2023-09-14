@@ -57,6 +57,7 @@ inference:
   overrides: null 
   ij_visible: null
   motif_only_2d: False
+  supply_motif_seq: False
 
 
 contigmap:

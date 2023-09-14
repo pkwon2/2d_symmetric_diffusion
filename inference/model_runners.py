@@ -492,7 +492,12 @@ class Sampler:
             # denoiser sees all as being reverse diffused
             is_diffused_denoiser = torch.ones_like(is_diffused)
             self.is_diffused = is_diffused_denoiser
-            indep.seq[self.is_diffused] = 21
+
+            if not self.inf_conf.supply_motif_seq:
+                indep.seq[self.is_diffused] = 21
+            else: 
+                # find which residues are non protein motif 
+                indep.seq[self.is_diffused_orig] = 21
             
             # diffuser will also diffuse everything
             diffuser_is_diffused = torch.clone(is_diffused_denoiser)
@@ -1248,6 +1253,7 @@ class NRBStyleSelfCond(Sampler):
         seq_t    = torch.clone(seq_init)
         seq_in   = torch.clone(seq_init)
 
+
         # B,N,L = xyz_t.shape[:3]
 
         ##################################
@@ -1388,12 +1394,10 @@ class NRBStyleSelfCond(Sampler):
                     mem_report() 
                     print('*'*50+'\n\n')
 
-                # debugging 
-                # tmp_out = vars(rfi)
-                # for key in tmp_out.keys():
-                #     if torch.is_tensor(tmp_out[key]):
-                #         tmp_out[key] = tmp_out[key].cpu().numpy()
-                # with open('rfi_yesrepeat_DBP_bugfixed.pkl','wb') as f:
+                #debugging 
+                # tmp_out = copy.deepcopy(rfi)
+                # rf2aa.tensor_util.to_device(tmp_out, torch.device('cpu'))
+                # with open('rfi_eye_inference_with_seq.pkl','wb') as f:
                 #     pickle.dump(tmp_out,f)
                 # sys.exit('Exiting for debugging')
 
