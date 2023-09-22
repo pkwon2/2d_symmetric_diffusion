@@ -1170,6 +1170,13 @@ class NRBStyleSelfCond(Sampler):
         """
         con_hal_idx0 = torch.from_numpy( self.contig_map.get_mappings()['con_hal_idx0'] )
 
+        is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig 
+        if not torch.any(is_protein_motif):
+            # no motifs, blank masks 
+            L = len(is_protein_motif)
+            mask_t2d = torch.zeros((L,L))
+            return is_protein_motif, mask_t2d
+
         ### is_protein_motif ###
         ########################
         abet = 'abcdefghijklmnopqrstuvwxyz'
