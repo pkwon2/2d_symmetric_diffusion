@@ -1505,12 +1505,9 @@ def propogate_repeat_features2(indep, Lasu, inf_conf):
     return o
 
 
-def propogate_repeat_features(indep, Lasu, main_block):
+def symmetrize_repeat_features(indep, Lasu, main_block):
     """
-    Propogates tensor information for repeat proteins
-
-    Parameters
-    ----------
+    Takes in an already correct length indep and makes sure all relevant features are repeated
     """
     Ncopy = len(indep.xyz.squeeze()) // Lasu 
 
@@ -1599,7 +1596,5 @@ def propogate_repeat_features(indep, Lasu, main_block):
     print('WARNING: repeat prot symmetrization assumes metals only')
     is_metal = o.seq > 21
     o.same_chain = get_repeat_same_chain(o.is_sm)
-
-    # torch.save(o, "tmp_indep.pt")
 
     return o

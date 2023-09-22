@@ -416,6 +416,7 @@ class Sampler:
             indep.mask_t_2d_subsymm  = self.target_feats['mask_2d_subsymm'].to(self.device) if torch.is_tensor(self.target_feats['mask_2d_subsymm']) else None
 
         is_partial = self.diffuser_conf.partial_T is not None
+
         indep, is_diffused = self.model_adaptor.insert_contig(indep, self.contig_map, partial_T=is_partial) 
         
         
@@ -531,7 +532,8 @@ class Sampler:
                 diffuse_sidechains=self.preprocess_conf.sidechain_input,
                 include_motif_sidechains=self.preprocess_conf.motif_sidechain_input,
                 center_crds=center_crds,
-                symmRs=symmRs)
+                symmRs=symmRs,
+                motif_only_2d=self.inf_conf.motif_only_2d)
             
             xT = fa_stack[-1].squeeze()[:,:14,:]
             xt = torch.clone(xT)
@@ -665,12 +667,19 @@ class Sampler:
             Lasu     = self._conf.model.repeat_length 
             assert indep.xyz.shape[0] % Lasu == 0, 'Lasu must be a factor of the number of tokens but found %d and %d' % (Lasu, indep.xyz.shape[0])
 
-            # indep = symmetry.propogate_repeat_features(indep, Lasu, main_block=self._conf.model.main_block)
-            indep = symmetry.propogate_repeat_features2(indep, Lasu, self._conf.inference)
-            # self.denoiser.decode_scheduler.visible[indep.is_sm] = True # all sm are visible/not diffused
+            if indep.xyz.shape[0] == Lasu:
+                # need to duplicate diffused crds + other features 
+                indep = symmetry.propogate_repeat_features2(indep, Lasu, self._conf.inference)
 
-            self.is_diffused = self.is_diffused.repeat(self._conf.inference.n_repeats)
-            self.is_diffused_orig = self.is_diffused_orig.repeat(self._conf.inference.n_repeats)
+                # duplicate is_diffused(_orig) to match length 
+                self.is_diffused = self.is_diffused.repeat(self._conf.inference.n_repeats)
+                self.is_diffused_orig = self.is_diffused_orig.repeat(self._conf.inference.n_repeats)
+
+            else: 
+                # indep/xyz/seq is already long enough from initialization
+                # assert repeat 
+                symmetry.symmetrize_repeat_features(indep, Lasu, main_block=0)
+
         
         if return_forward_trajectory:
             forward_traj = torch.cat([xyz_true[None], fa_stack[:,:,:]])
@@ -1047,7 +1056,7 @@ def find_true_chunks_indices(tensor):
     return chunks
 
 
-def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat):
+def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat, supplied_full_contig):
     """
     Given contig map and motif chunks that can see each other, create t2d mask
     defining which motif chunks can see each other. 
@@ -1087,7 +1096,14 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat):
 
 
     # (2) Fill in LxL matrix with coarse mask info
-    con_hal_idx0_full = torch.cat([con_hal_idx0 + i*Lasu for i in range(nrepeat)])
+    L_contigs = len(con_hal_idx0)
+    if not supplied_full_contig:
+        con_hal_idx0_full = torch.cat([con_hal_idx0 + i*Lasu for i in range(nrepeat)])
+    else: 
+        con_hal_idx0_full = con_hal_idx0
+
+    ic(con_hal_idx0_full.shape)
+
     mask2d = torch.zeros(L, L)
 
     # make 1D array designating which chunks are motif
@@ -1110,7 +1126,7 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat):
 
     return mask2d, is_motif
 
-def parse_ij_get_repeat_mask(ij_visible, L, n_repeat, con_hal_idx0):
+def parse_ij_get_repeat_mask(ij_visible, L, n_repeat, con_hal_idx0, supplied_full_contig):
     """
     Helper function for getting repeat protein mask 2d info
     """
@@ -1138,7 +1154,7 @@ def parse_ij_get_repeat_mask(ij_visible, L, n_repeat, con_hal_idx0):
 
 
     # create a mask of which chunks are visible to each other compatible with contigs/con_hal_idx0
-    mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, n_repeat)
+    mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, n_repeat, supplied_full_contig)
 
     return mask_t2d
 
@@ -1178,15 +1194,24 @@ class NRBStyleSelfCond(Sampler):
                 ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
                 ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
 
-                mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, 1)
+                mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, 1, supplied_full_contig=True)
+            
             else: 
                 assert type(self._conf.inference.n_repeats) is int        # must be present 
                 is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig  # should be appropriate length 
 
+                if is_protein_motif.sum() == len(con_hal_idx0):
+                    supplied_full_contig = True
+                    print('Detected full contig supplied--------------')
+                else: 
+                    supplied_full_contig = False
+
+                ic(is_protein_motif.shape)
+
                 ### t2d_is_revealed ###
                 n_repeat = self._conf.inference.n_repeats
                 L = len(is_protein_motif)
-                mask_t2d = parse_ij_get_repeat_mask(self._conf.inference.ij_visible, L, n_repeat, con_hal_idx0)
+                mask_t2d = parse_ij_get_repeat_mask(self._conf.inference.ij_visible, L, n_repeat, con_hal_idx0, supplied_full_contig)
 
         else: 
             # non-motif is diffused, motif given in 3d  
