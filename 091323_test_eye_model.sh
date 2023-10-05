@@ -8,13 +8,14 @@
 
 script="/mnt/home/davidcj/projects/rf_diffusion_2template/rf_diffusion/run_inference.py"
 
-ckpt_3template='/home/davidcj/projects/train_2template/rf_diffusion/train_session2023-09-06_1694049198.4710052/models/BFF_12.pt'
+#ckpt_3template='/home/davidcj/projects/train_2template/rf_diffusion/train_session2023-09-06_1694049198.4710052/models/BFF_12.pt'
+ckpt_3template='/home/davidcj/projects/train_2template/rf_diffusion/train_session2023-09-14_1694727421.6775959/models/BFF_0.10.pt'
 
 pdb='/home/davidcj/projects/train_2template/rf_diffusion/train_session2023-09-13_1694634209.8062925/training_pdbs/epoch_1_80_diff_pdb_aa_t_200_true.pdb'
 
 # Partially diffusing 1hk9 with no noise using new sym until find clashing example 
 # Then can be used as input to test differences in predictions between new sym and old sym 
-prefix="./experiments/test_eye/test_epoch1_80_w_seq_and_center" 
+prefix="./experiments/test_eye/test_epoch1_80_w_seq_and_center_finetune" 
 
 /software/containers/SE3nv.sif $script --config-name=aa \
 inference.model_runner='NRBStyleSelfCond' \
