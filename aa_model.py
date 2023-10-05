@@ -80,7 +80,6 @@ class Indep:
     mask_t_2d_subsymm: Optional[torch.Tensor] = None
 
     def write_pdb(self, path):
-        ic(self.xyz.shape, self.seq.shape)
         # final_seq = torch.where(self.seq >= 20, 0, self.seq)
         # util.writepdb(path, self.xyz[:,:3], final_seq)
         seq = self.seq
@@ -178,16 +177,68 @@ class Model:
         self.NTOKENS = rf2aa.chemical.NAATOKENS
         self.converter = XYZConverter()
 
-    def forward(self, rfi, **kwargs):
-        # ipdb.set_trace()
-        rfi_dict = dataclasses.asdict(rfi)
-        # assert set(rfi_dict.keys()) - set()
-        # ic({**rfi_dict, **kwargs}.keys())
-        # torch.save(to_cpu_dict({**rfi_dict, **kwargs}), 'rfi_data.pt')
-        # sys.exit('Exiting after saving rfi.pt')
-        # with torch.cuda.amp.autocast(True):
-        self.model.eval()
-        return RFO(*self.model(**{**rfi_dict, **kwargs}))
+    # def forward(self, rfi, **kwargs):
+    #     # ipdb.set_trace()
+    #     rfi_dict = dataclasses.asdict(rfi)
+    #     # assert set(rfi_dict.keys()) - set()
+    #     # ic({**rfi_dict, **kwargs}.keys())
+    #     # torch.save(to_cpu_dict({**rfi_dict, **kwargs}), 'rfi_data.pt')
+    #     # sys.exit('Exiting after saving rfi.pt')
+    #     # with torch.cuda.amp.autocast(True):
+    #     self.model.eval()
+    #     return RFO(*self.model(**{**rfi_dict, **kwargs}))
+
+
+    def forward(self, rfi, N_cycle, **kwargs):
+        model = self.model 
+        model.eval()
+        assert N_cycle > 0
+
+        if N_cycle == 1:
+            rfi_dict = dataclasses.asdict(rfi)
+            return RFO(*model(**{**rfi_dict, **kwargs}))
+
+        else:
+
+            # Do the first N-1 recycles 
+            with torch.no_grad():
+                for i in range(N_cycle-1):
+
+                    if i == 0:
+                        rfi_dict = dataclasses.asdict(rfi)
+                        input = {**rfi_dict, **kwargs}
+                        input['msa_prev'] = None
+                        input['pair_prev'] = None
+                        input['state_prev'] = None
+                        input['return_raw'] = True
+                        out = model(**input)
+
+                    else:
+                        msa_prev, pair_prev, xyz_prev, state, alpha_prev, _ = out
+                        rfi_dict = dataclasses.asdict(rfi)
+                        rfi_dict['msa_prev']    = msa_prev
+                        rfi_dict['pair_prev']   = pair_prev
+                        rfi_dict['xyz']         = xyz_prev
+                        rfi_dict['state_prev']  = state
+
+                        input = {**rfi_dict, **kwargs}
+                        input['return_raw'] = True
+                        out = model(**input)
+
+                # Do the last recycle, and return RFO 
+                msa_prev, pair_prev, xyz_prev, state, alpha_prev, _ = out
+                rfi_dict = dataclasses.asdict(rfi)
+                rfi_dict['msa_prev']    = msa_prev
+                rfi_dict['pair_prev']   = pair_prev
+                rfi_dict['xyz']         = xyz_prev
+                rfi_dict['state_prev']  = state
+
+                input = {**rfi_dict, **kwargs}
+                input['return_raw'] = False
+
+                # with grad 
+                return RFO(*model(**input))
+
 
     def make_indep(self, pdb, parse_hetatm):
         # self.target_feats = iu.process_target(self.inf_conf.input_pdb, parse_hetatom=True, center=False)
@@ -284,7 +335,7 @@ class Model:
         return indep
 
 
-    def insert_contig(self, indep, contig_map, partial_T=False):
+    def insert_contig(self, indep, contig_map, partial_T=False, refine=False):
         """
         Assembl
         """
@@ -324,7 +375,7 @@ class Model:
         L_in, NATOMS, _ = indep.xyz.shape
 
         # initialize xyz for trajectory - slice in protein atoms from original indep
-        if not partial_T:
+        if not partial_T and not refine:
             o.xyz = torch.full((L_mapped, NATOMS, 3), np.nan)
             o.xyz[contig_map.hal_idx0] = indep.xyz[contig_map.ref_idx0]  
         else:

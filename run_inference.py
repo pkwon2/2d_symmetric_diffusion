@@ -302,6 +302,10 @@ def sample_one(sampler, simple_logging=False):
             denoised_xyz_stack.append(x_t)
             seq_stack.append(seq_t)
 
+            if sampler.inf_conf.refine:
+                print('Breaking loop because doing refinement')
+                break # refinement only needs a single step through the loop
+
         # if doing new symmetry, dump full complex:
         if sampler._conf.inference.internal_sym:
             symmRs = sampler.symmRs.cpu()   # get symmetry operations for whole complex

@@ -58,6 +58,8 @@ inference:
   ij_visible: null
   motif_only_2d: False
   supply_motif_seq: False
+  refine_recycles: -1
+  refine: False
 
 
 contigmap:
@@ -129,6 +131,7 @@ diffuser:
   b_T: 7e-2
   schedule_type: linear
   so3_type: igso3
+  eucl_type: standard
   aa_decode_steps: 40
   chi_type: wrapped_normal
   crd_scale: 0.0667

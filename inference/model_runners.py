@@ -392,6 +392,7 @@ class Sampler:
             'visible': visible,
             'aa_decode_steps': aa_decode_steps,
         })
+        denoise_kwargs.pop('eucl_type')
         return iu.Denoise(**denoise_kwargs)
 
     def sample_init(self, return_forward_trajectory=False):
@@ -409,6 +410,7 @@ class Sampler:
 
         indep = self.model_adaptor.make_indep(self._conf.inference.input_pdb, self._conf.inference.ligand)
 
+
         # check for subsymm template and add to indep if present
         if self.inf_conf.subsymm_template:
             indep.subsymm_seq        = self.target_feats['subsymm_seq'].to(self.device)
@@ -417,7 +419,10 @@ class Sampler:
 
         is_partial = self.diffuser_conf.partial_T is not None
 
-        indep, is_diffused = self.model_adaptor.insert_contig(indep, self.contig_map, partial_T=is_partial) 
+        indep, is_diffused = self.model_adaptor.insert_contig(indep, 
+                                                              self.contig_map, 
+                                                              partial_T=is_partial,
+                                                              refine=self.inf_conf.refine) 
         
         
         self.is_diffused = is_diffused
@@ -549,6 +554,7 @@ class Sampler:
             xT = indep.xyz[:,:14,:]
             xt = torch.clone(xT) 
             indep.xyz = xt
+        
     
 
         # # now save again after diffusion 
@@ -1292,7 +1298,9 @@ class NRBStyleSelfCond(Sampler):
         ######## Str Self Cond ###########
         ##################################
         self_cond = False
-        if ((t < self.diffuser.T) and (t != self.diffuser_conf.partial_T)) and self._conf.inference.str_self_cond:
+        cond_A = ((t < self.diffuser.T) and (t != self.diffuser_conf.partial_T)) and self._conf.inference.str_self_cond
+        cond_B = not self.inf_conf.refine  # cannot self cond with refinement model
+        if cond_A and cond_B:
             # in the middle of the traj, so self condition on previous px0
             self_cond=True
 
@@ -1433,8 +1441,13 @@ class NRBStyleSelfCond(Sampler):
                 #     pickle.dump(tmp_out,f)
                 # sys.exit('Exiting for debugging')
 
+                if self.inf_conf.refine: 
+                    N_cycle = self.inf_conf.refine_recycles
+                else: 
+                    N_cycle = 1
+
                 with torch.cuda.amp.autocast(True):
-                    rfo = self.model_adaptor.forward(rfi, return_infer=True, **kwargs)
+                    rfo = self.model_adaptor.forward(rfi, N_cycle=N_cycle, return_infer=True, **kwargs)
                 print('********* SUCCESSFULL MODEL FORWARD *******')
                 self.cur_symmsub = rfo.symmsub
                 
@@ -1538,7 +1551,7 @@ class NRBStyleSelfCond(Sampler):
             if self.cur_rigid_tmplt is None: 
                 pass
 
-        if t > self._conf.inference.final_step:
+        if t > self._conf.inference.final_step and not self.inf_conf.refine:
             x_t_1, seq_t_1, tors_t_1, px0, cur_rigid_tmplt = self.denoiser.get_next_pose(
                 xt=rfi.xyz[0,:,:14].cpu(),
                 px0=px0,

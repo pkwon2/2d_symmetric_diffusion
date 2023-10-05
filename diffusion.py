@@ -10,6 +10,8 @@ from scipy.spatial.transform import Rotation as scipy_R
 from scipy.spatial.transform import Slerp 
 import rotation_conversions
 
+import util
+import sys
 from util import rigid_from_3_points, get_torsions
 
 from util import torsion_indices as TOR_INDICES 
@@ -124,6 +126,106 @@ def get_beta_schedule(T, b0, bT, schedule_type, schedule_params={}, inference=Fa
         print(f"With this beta schedule ({schedule_type} schedule, beta_0 = {b0}, beta_T = {bT}), alpha_bar_T = {alphabar_t_schedule[-1]}")
 
     return schedule, alpha_schedule, alphabar_t_schedule 
+
+
+class GaussianNoise():
+    # class for perturbing points with a fixed amount of gaussian noise (not diffusion)
+
+    def __init__(self,
+                 T,
+                 **schedule_kwargs):
+
+        ic(schedule_kwargs)
+        assert schedule_kwargs.get('refine_variance',False), "Must have refine_variance in GaussianNoise schedule_kwargs"
+
+        # ignore all classic diffusion parameters
+        self.T          = T
+        self.variance   = schedule_kwargs['refine_variance']
+
+        # spoof other items 
+        self.beta_schedule = None
+        self.alphabar_schedule = None
+
+    def diffuse_translations(self, xyz, diffusion_mask=None, var_scale=1, crd_scale=1.0):
+        assert len(xyz.shape) == 3, 'xyz must be (L,3,3)'
+        return self.apply_gaussian_noise(xyz, diffusion_mask, crd_scale)
+
+
+    def apply_gaussian_noise(self, xyz, diffusion_mask, crd_scale):
+        """
+        Quick wrapper to make dimmensions compatible with normal diffusion training
+        """
+        noised_crds, delta = self._apply_gaussian_noise(xyz, diffusion_mask, crd_scale)
+
+        # spoof a full stack of diffused crds and deltas
+        bb_stack = [noised_crds]*self.T
+        bb_stack = torch.stack(bb_stack).transpose(0,1)
+        T_stack  = [delta]*self.T
+        T_stack  = torch.stack(T_stack).transpose(0,1)
+
+        return bb_stack, T_stack
+
+
+    def _apply_gaussian_noise(self, xyz, diffusion_mask, crd_scale):
+        """
+        Applies gaussian noise to the points in x according to 
+        self.mu and self.sigma
+
+        Parameters: 
+
+        xyz (torch.tensor, required): (L,3,3) set of backbone coordinates
+
+        diffusion_mask (torch.tensor, optional):
+        """
+        util.writepdb('xyz_from_apply_gaussian_noise.pdb', xyz, torch.ones(len(xyz)).long())
+        mean = xyz[:,1,:]
+        var = torch.ones_like(mean)*self.variance
+
+        # variance is in A^2, given from command line 
+        # --> scale to crd_scale because crds are already scaled
+        sampled = torch.normal(mean, torch.sqrt(var)*crd_scale)
+        delta = sampled - mean
+
+        if diffusion_mask != None:
+            delta[diffusion_mask,...] = 0
+
+        out_crds = xyz + delta[:,None,:].expand_as(xyz)
+
+        return out_crds, delta
+
+class RandomFrames():
+    """
+    Produces completely random frames for all residues 
+    """
+
+    def __init__(self, T):
+        self.T = T
+
+
+    def diffuse_frames(self, xyz, t_list, diffusion_mask=None):
+        return self.random_frames(xyz, diffusion_mask)
+
+
+    def random_frames(self, xyz, diffusion_mask=None):
+        """
+        produces a random frame for all AAs 
+        """
+        assert len(xyz.shape) == 3, 'xyz must be (L,3,3)'
+        if torch.is_tensor(xyz):
+            xyz = xyz.numpy()
+
+        R_rand = scipy_R.random(len(xyz))
+
+        # N  = torch.from_numpy(  xyz[None,:,0,:]  )
+        Ca = torch.from_numpy(  xyz[None,:,1,:]  )
+        # C  = torch.from_numpy(  xyz[None,:,2,:]  )
+
+        slerped_crds = np.einsum('lij,laj->lai', R_rand.as_matrix(), xyz[:,:3,:] - Ca.squeeze()[:,None,...].numpy()) + Ca.squeeze()[:,None,...].numpy()
+
+        slerped_crds = np.stack([slerped_crds]*self.T, axis=1)
+
+        # spoof set of frames as second return value, it's not used 
+        return slerped_crds, None
 
 
 class EuclideanDiffuser():
@@ -849,7 +951,8 @@ class Diffuser():
                  var_scale=1.0,
                  cache_dir='.',
                  partial_T=None,
-                 truncation_level=2000
+                 truncation_level=2000,
+                 eucl_type='standard',
                  ):
         """
         
@@ -868,6 +971,9 @@ class Diffuser():
         self.aa_decode_steps=aa_decode_steps
         self.cache_dir = cache_dir
 
+        self.so3_type = so3_type
+        self.eucl_type = eucl_type
+
         # get backbone frame diffuser 
         if so3_type == 'slerp':
             self.so3_diffuser =  SLERP(self.T)
@@ -881,12 +987,20 @@ class Diffuser():
                 max_b=max_b,
                 cache_dir=self.cache_dir,
                 L=truncation_level, 
-            )        
+            )       
+        elif so3_type == 'random':
+            assert eucl_type == 'gaussian'
+            self.so3_diffuser = RandomFrames(self.T) 
         else:
             raise NotImplementedError()
 
         # get backbone translation diffuser
-        self.eucl_diffuser = EuclideanDiffuser(self.T, b_0, b_T, schedule_type=schedule_type, **schedule_kwargs)
+        assert eucl_type in ['standard', 'gaussian'], 'eucl_type must be standard or gaussian'
+        if eucl_type == 'standard':
+            self.eucl_diffuser = EuclideanDiffuser(self.T, b_0, b_T, schedule_type=schedule_type, **schedule_kwargs)
+        else:
+            assert so3_type == 'random', 'gaussian noise only implemented for random frames'
+            self.eucl_diffuser = GaussianNoise(self.T, **schedule_kwargs)
 
         # get chi angle diffuser 
         self.torsion_diffuser = INTERP(self.T)
@@ -919,7 +1033,6 @@ class Diffuser():
 
 
         """
-        # ic(o.xyz[0])
         if diffusion_mask is None:
             diffusion_mask = torch.zeros(len(xyz.squeeze())).to(dtype=bool)
 
@@ -956,7 +1069,6 @@ class Diffuser():
 
             xyz_full = torch.einsum('sij,laj->slai',symmRs,xyz)
             xyz_full = xyz_full.reshape(s*l,-1,3)
-            ic(xyz_full.shape)
             diff_mask_repeat = diffusion_mask.repeat(len(symmRs))
 
             self.motif_com = xyz_full[diff_mask_repeat,1,:].mean(dim=0)
@@ -968,13 +1080,14 @@ class Diffuser():
         # ic(o.xyz[0])
         #xyz = xyz - xyz[nan_mask][:,1,:].mean(dim=0) # DJ aug 23, 2022 - commenting out bc now better logic to assert no nans 
         xyz_true = torch.clone(xyz)
-
         xyz = xyz * self.crd_scale
 
         
         # 1 get translations 
         tick = time.time()
-        diffused_T, deltas = self.eucl_diffuser.diffuse_translations(xyz[:,:3,:].clone(), diffusion_mask=diffusion_mask)
+        kwargs = {'crd_scale':self.crd_scale} if self.eucl_type == 'gaussian' else {}
+        diffused_T, deltas = self.eucl_diffuser.diffuse_translations(xyz[:,:3,:].clone(), diffusion_mask=diffusion_mask, **kwargs)
+
         #print('Time to diffuse coordinates: ',time.time()-tick)
         diffused_T /= self.crd_scale
         deltas     /= self.crd_scale
@@ -995,7 +1108,14 @@ class Diffuser():
         cum_delta = deltas.cumsum(dim=1)
         # The coordinates of the translated AND rotated frames
         diffused_BB = (torch.from_numpy(diffused_frame_crds) + cum_delta[:,:,None,:]).transpose(0,1) # [n,L,3,3]
-        #diffused_BB  = torch.from_numpy(diffused_frame_crds).transpose(0,1)
+
+        if self.eucl_type == 'gaussian':
+            shape_before = diffused_BB.shape 
+            assert type(self.eucl_diffuser) == GaussianNoise
+
+            diffused_BB = torch.stack([diffused_BB[0]]*self.T, dim=0)
+            assert diffused_BB.shape == shape_before
+
 
         # Full atom diffusions at all timepoints 
         if diffuse_sidechains:
