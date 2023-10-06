@@ -21,7 +21,7 @@ from rf2aa.Track_module import update_symm_Rs
 import aa_model
 import dataclasses
 import copy
-
+import pdb
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
 from kinematics import get_init_xyz
@@ -196,6 +196,11 @@ class Sampler:
         # Get recycle schedule    
         recycle_schedule = str(self.inf_conf.recycle_schedule) if self.inf_conf.recycle_schedule is not None else None
         self.recycle_schedule = iu.recycle_schedule(self.T, recycle_schedule, self.inf_conf.num_recycles)
+
+        # replace prefix w/ slightly altered name of input_pdb for refinement only 
+        if self.inf_conf.refine:
+            pdb_in = self.inf_conf.input_pdb
+            self.inf_conf.output_prefix = pdb_in.replace('.pdb', '_refined')
 
         
 
@@ -376,6 +381,11 @@ class Sampler:
             seq_len = target_feats['seq'].shape[0]
             self.contig_conf.contigs = [f'{self.ppi_conf.binderlen}',f'B{self.ppi_conf.binderlen+1}-{seq_len}']
         self._log.info(f'Using contig: {self.contig_conf.contigs}')
+        
+        if self.inf_conf.refine: 
+            L = len(self.target_feats['seq'].squeeze())
+            self.contig_conf['contigs'] = [f'{L}-{L}']
+
         return ContigMap(target_feats, **self.contig_conf)
 
     def construct_denoiser(self, L, visible):
@@ -408,7 +418,10 @@ class Sampler:
         # moved this here as should be updated each iteration of diffusion
         self.contig_map = self.construct_contig(self.target_feats)
 
-        indep = self.model_adaptor.make_indep(self._conf.inference.input_pdb, self._conf.inference.ligand)
+
+        indep = self.model_adaptor.make_indep(self._conf.inference.input_pdb, 
+                                              self._conf.inference.ligand,
+                                              self._conf.inference.refine)
 
 
         # check for subsymm template and add to indep if present
@@ -418,6 +431,7 @@ class Sampler:
             indep.mask_t_2d_subsymm  = self.target_feats['mask_2d_subsymm'].to(self.device) if torch.is_tensor(self.target_feats['mask_2d_subsymm']) else None
 
         is_partial = self.diffuser_conf.partial_T is not None
+
 
         indep, is_diffused = self.model_adaptor.insert_contig(indep, 
                                                               self.contig_map, 
@@ -554,7 +568,6 @@ class Sampler:
             xT = indep.xyz[:,:14,:]
             xt = torch.clone(xT) 
             indep.xyz = xt
-        
     
 
         # # now save again after diffusion 
@@ -1108,7 +1121,6 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat, supplied_full_c
     else: 
         con_hal_idx0_full = con_hal_idx0
 
-    ic(con_hal_idx0_full.shape)
 
     mask2d = torch.zeros(L, L)
 
@@ -1174,9 +1186,29 @@ class NRBStyleSelfCond(Sampler):
         """
         Gets is_protein_motif and t2d_is_revealed for 3template inference
         """
+        if indep.metadata.get('refinement'):
+            refine = True
+            ref_dict = indep.metadata['refinement']
+        else:
+            refine = False
+
+
         con_hal_idx0 = torch.from_numpy( self.contig_map.get_mappings()['con_hal_idx0'] )
+        
 
         is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig 
+
+        if refine: 
+            # we can rely on src_con_hal to tell us where in THIS hal the motif goes 
+            src_con_hal_idx0 = torch.from_numpy( ref_dict['con_hal_idx0'] )
+            # src_con_ref_idx0 = torch.from_numpy( ref_dict['src_con_ref_idx0'] )
+            
+            assert is_protein_motif.sum() == 0
+            is_protein_motif[src_con_hal_idx0] = True 
+            con_hal_idx0 = src_con_hal_idx0
+
+
+
         if not torch.any(is_protein_motif):
             # no motifs, blank masks 
             L = len(is_protein_motif)
@@ -1196,6 +1228,8 @@ class NRBStyleSelfCond(Sampler):
             if not self._conf.model.symmetrize_repeats:
                 # asymmetric case 
                 is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig
+                if refine: 
+                    is_protein_motif[src_con_hal_idx0] = True
 
                 # t2d_is_revealed
                 L = len(is_protein_motif)
@@ -1203,13 +1237,16 @@ class NRBStyleSelfCond(Sampler):
 
                 # User can use ij_visible argument
                 ij_visible = self._conf.inference.ij_visible
+                if refine: 
+                    ij_visible = ref_dict['ij_visible']
                 assert ij_visible is not None, '3 template + motif_only_2d requires description of motif pairwise visibility'
                 ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
                 ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
 
                 mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, 1, supplied_full_contig=True)
             
-            else: 
+            else:
+                assert not refine, 'refine not yet implemented for symmetry/repeat' 
                 assert type(self._conf.inference.n_repeats) is int        # must be present 
                 is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig  # should be appropriate length 
 
@@ -1219,7 +1256,6 @@ class NRBStyleSelfCond(Sampler):
                 else: 
                     supplied_full_contig = False
 
-                ic(is_protein_motif.shape)
 
                 ### t2d_is_revealed ###
                 n_repeat = self._conf.inference.n_repeats

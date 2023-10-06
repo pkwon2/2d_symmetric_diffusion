@@ -62,6 +62,7 @@ C_TERMINUS = 2
 @dataclass
 class Indep:
     seq: torch.Tensor # [L]
+    seq2: torch.Tensor # DJ 100523 - new for refine model
     xyz: torch.Tensor # [L, 36?, 3]
     xyz2: torch.Tensor # DJ new - three template
     idx: torch.Tensor
@@ -73,6 +74,9 @@ class Indep:
     same_chain: torch.Tensor
     is_sm: torch.Tensor
     terminus_type: torch.Tensor
+
+    # DJ new - introduced for refinement model
+    metadata: dict
 
     # dj - new subsymmetric template information 
     subsymm_seq: Optional[torch.Tensor] = None
@@ -240,7 +244,7 @@ class Model:
                 return RFO(*model(**input))
 
 
-    def make_indep(self, pdb, parse_hetatm):
+    def make_indep(self, pdb, parse_hetatm, refine=False):
         # self.target_feats = iu.process_target(self.inf_conf.input_pdb, parse_hetatom=True, center=False)
         # init_protein_tmpl=False, init_ligand_tmpl=False, init_protein_xyz=False, init_ligand_xyz=False,
         #     parse_hetatm=False, n_cycle=10, random_noise=5.0)
@@ -319,11 +323,48 @@ class Model:
         terminus_type[0] = N_TERMINUS
         terminus_type[Ls[0]-1] = C_TERMINUS
 
+        metadata = {} # default empty 
+
+        # refinement of pdbs that were diffused and have a trb file 
+        if not refine: 
+            xyz2 = xyz.clone()
+            seq2 = seq.clone()
+        else: 
+            try: 
+                trb = pdb.replace('.pdb', '.trb')
+                data = np.load(trb, allow_pickle=True)
+            except: 
+                raise Exception(f'Could not find trb file for pdb in same folder: {pdb}')
+            
+            conf = data['config']
+            src_pdb = conf['inference']['input_pdb']
+            ij_visible = conf['inference']['ij_visible']
+
+            # xyz_prot, mask_prot, idx_prot, seq_prot
+            src_feats = inference.utils.parse_pdb(src_pdb)
+            xyz2 = torch.tensor(src_feats['xyz']).to(xyz.device)
+            mask2 = torch.tensor(src_feats['mask'])
+            idx2 = torch.tensor(src_feats['idx']).to(xyz.device)
+            seq2 = torch.tensor(src_feats['seq']).to(xyz.device)
+
+            xyz2[:,14:] = 0 # remove hydrogens
+
+            # dictionary containing refinement-assocaited info 
+            ref_dict = {}
+            ref_dict['ij_visible'] = ij_visible
+            ref_dict['con_ref_idx0'] = data['con_ref_idx0']
+            ref_dict['con_hal_idx0'] = data['con_hal_idx0']
+
+            metadata['refinement'] = ref_dict
+
+
+            tmp = xyz2[ref_dict['con_ref_idx0']]
 
         indep = Indep(
             seq,
+            seq2,
             xyz,
-            xyz.clone(), # DJ -- three template, dummy xyz for now 
+            xyz2, # DJ -- three template, dummy xyz for now 
             idx_pdb,
             # SM specific
             bond_feats,
@@ -331,7 +372,9 @@ class Model:
             atom_frames,
             same_chain,
             is_sm,
-            terminus_type)
+            terminus_type,
+            metadata)
+        ic(indep.is_sm.shape)
         return indep
 
 
@@ -340,7 +383,6 @@ class Model:
         Assembl
         """
         o = copy.deepcopy(indep)
-
 
         # Insert small mol into contig_map
         all_chains = set(ch for ch,_ in contig_map.hal)
@@ -391,6 +433,7 @@ class Model:
         o.is_sm = torch.full((L_mapped,), 0).bool()
         o.is_sm[contig_map.hal_idx0] = indep.is_sm[contig_map.ref_idx0]
         o.same_chain = torch.tensor(chain_id[None, :] == chain_id[:, None])
+        
         o.xyz = get_init_xyz(o.xyz[None, None], o.is_sm).squeeze()
 
         # HACK.  ComputeAllAtom in the network requires N and C coords even for atomized residues,
@@ -423,7 +466,11 @@ class Model:
 
         # To see the shapes of the indep struct with contig inserted
         # print(rf2aa.tensor_util.info(rf2aa.tensor_util.to_ordered_dict(o)))
-        o.xyz2 = o.xyz.clone() # DJ - three template, dummy xyz for now
+
+        if refine: 
+            pass # want to keep original xyz2 because it contains perfect motif  
+        else:
+            o.xyz2 = o.xyz.clone() # DJ - three template, dummy xyz for now
 
         return o, is_diffused
 
@@ -456,7 +503,28 @@ class Model:
         is_protein_motif (torch.Tensor): whether residue is a motif or not 
 
         t2d_is_revealed (torch.Tensor): boolean mask marking which i,j pairs can see each other in the 3rd template 
+        
+        
+        REFINEMENT NOTES: 
+
+        If doing refinement, we use coordinates from the source pdb containing a perfect, natural motif 
+        that was scaffolded during a diffusion trajectory. 
+
+        (1) Replace the sequence at HAL positions in current inputs with the motif sequence from src pdb
+        (2) Use xyz2 (coordinates of original pdb) for motif in 3rd template
+        
         """
+        if indep.metadata.get('refinement', None) is not None:
+            assert twotemplate and threetemplate 
+            ref_dict = indep.metadata['refinement']
+            refine=True
+            src_con_hal_idx0 = torch.from_numpy( ref_dict['con_hal_idx0'] )
+            src_con_ref_idx0 = torch.from_numpy( ref_dict['con_ref_idx0'] )
+
+            # replace the sequence w/ sequence from original motif
+            src_motif_seq = indep.seq2[src_con_ref_idx0]
+        else:
+            refine=False
 
         xyz_t = indep.xyz
         seq_one_hot = torch.nn.functional.one_hot(
@@ -495,6 +563,8 @@ class Model:
 
         #seqt1d = torch.clone(seq)
         seq_cat_shifted = seq_one_hot.argmax(dim=-1)
+        if refine: 
+            seq_cat_shifted[src_con_hal_idx0] = src_motif_seq
         seq_cat_shifted[seq_cat_shifted>=MASKINDEX] -= 1
         t1d = torch.nn.functional.one_hot(seq_cat_shifted, num_classes=NAATOKENS-1)
         t1d = t1d[None, None] # [L, NAATOKENS-1] --> [1,1,L, NAATOKENS-1]
@@ -659,7 +729,11 @@ class Model:
             ##### 3rd template #####
             # set of diffused crds w/ motif sliced in
             xyz_xt_w_motif = xyz.clone()
-            xyz_xt_w_motif[0,is_protein_motif,:NHEAVYPROT] = indep.xyz2[is_protein_motif,:NHEAVYPROT]
+
+            # DJ - if refine, selection in xyz2 needs to reference the original src pdb for motif
+            sel2 = src_con_ref_idx0 if refine else is_protein_motif
+
+            xyz_xt_w_motif[0,is_protein_motif,:NHEAVYPROT] = indep.xyz2[sel2,:NHEAVYPROT]
 
             # t2d containing desired motif 
             # this construction uses bool mask to allow certain motifs to see others
@@ -863,7 +937,9 @@ def adaptor_fix_bb_indep(out):
 
     indep = Indep(
         rf2aa.tensor_util.assert_squeeze(seq), # [L]
+        rf2aa.tensor_util.assert_squeeze(seq), # [L]
         true_crds[:,:14], # [L, 14, 3]
+        true_crds[:,14:], # [L, 14, 3]
         idx_pdb,
 
         # SM specific
