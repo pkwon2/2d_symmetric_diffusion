@@ -68,6 +68,21 @@ class Sampler:
         self.initialize(conf)
     
     def initialize(self, conf: DictConfig):
+        
+        # hacky - replace the inference.ckpt_path arg up front if it's in overrides
+        if conf.inference.overrides:
+            is_ckpt_arg = ['ckpt_path' in o for o in conf.inference.overrides]
+            if any(is_ckpt_arg):
+                assert sum(is_ckpt_arg) == 1, 'can only be one ckpt arg'
+                ckpt_arg_idx = [i for i,_ in enumerate(is_ckpt_arg) if _][0] # what index 
+                ckpt_arg = conf.inference.overrides[ckpt_arg_idx]
+
+                ckpt_path = ckpt_arg.replace('inference.ckpt_path=','')
+                conf.inference.ckpt_path = ckpt_path
+                print('Reset ckpt path arg from json overrides')
+
+
+
         self._log = logging.getLogger(__name__)
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
@@ -93,6 +108,7 @@ class Sampler:
                 print('******* Loading model for ', self.ckpt_path, ' from disk *********')
                 self.load_checkpoint()
                 self.assemble_config_from_chk()
+                
                 # Now actually load the model weights into RF
                 self.model = self.load_model()
 
@@ -253,6 +269,7 @@ class Sampler:
             if self._conf.inference.overrides:
                 overrides.extend(self._conf.inference.overrides)
 
+
         if 'config_dict' in self.ckpt.keys():
             print("Assembling -model, -diffuser and -preprocess configs from checkpoint")
 
@@ -268,9 +285,11 @@ class Sampler:
                         self._conf[cat][key] = self.ckpt['config_dict'][cat][key]
                     except:
                         print(f'WARNING: config {cat}.{key} is not saved in the checkpoint. Check that conf.{cat}.{key} = {self._conf[cat][key]} is correct')
+
             # add back in overrides again
             for override in overrides:
-                if override.split(".")[0] in ['model','diffuser','seq_diffuser','preprocess']:
+
+                if override.split(".")[0] in ['model','diffuser','seq_diffuser','preprocess','inference']:
                     print(f'WARNING: You are changing {override.split("=")[0]} from the value this model was trained with. Are you sure you know what you are doing?') 
                     mytype = type(self._conf[override.split(".")[0]][override.split(".")[1].split("=")[0]])
                     
@@ -282,8 +301,6 @@ class Sampler:
         else:
             print('WARNING: Model, Diffuser and Preprocess parameters are not saved in this checkpoint. Check carefully that the values specified in the config are correct for this checkpoint')     
 
-        print('self._conf:')
-        ic(self._conf)
 
     def load_model(self):
         """Create RosettaFold model from preloaded checkpoint."""

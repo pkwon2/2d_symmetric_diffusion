@@ -121,6 +121,8 @@ def main(conf: HydraConfig) -> None:
             mini_overrides = get_overrides(json_arg)
             tmp_conf.inference.overrides = mini_overrides # HACK: to get overrides into assemble_config_from_chk
 
+            ic(tmp_conf)
+
             # DJ -  repeat/symm specific hack
             #       There are some arguments in conf that make their way into RF object attributes      
             #       Luckily, they should all be under the 'model' key in conf, so iterate over those and reset 
@@ -276,7 +278,7 @@ def sample_one(sampler, simple_logging=False):
             # replace frames 
             if sampler._conf.preprocess.eye_frames:
                 print('WARNING: replacing all frames with EYE regardless of motif/nonmotif')
-                indep.xyz = aa_model.eye_frames2(indep.xyz, center=False) # 
+                indep.xyz = aa_model.eye_frames2(indep.xyz, center=True) # 
             elif sampler._conf.preprocess.randomize_frames:
                 print('WARNING: replacing all frames with RANDOM regardless of motif/nonmotif')
                 indep.xyz = aa_model.randomly_rotate_frames(indep.xyz)
@@ -304,6 +306,17 @@ def sample_one(sampler, simple_logging=False):
 
             if sampler.inf_conf.refine:
                 print('Breaking loop because doing refinement')
+                # have sequence of the native motif as the final sequence in the pdb, all else ala 
+                seq_out = torch.zeros_like(seq_t).long() # (L,80)
+                
+                con_ref = indep.metadata['refinement']['con_ref_idx0']
+                con_hal = indep.metadata['refinement']['con_hal_idx0']
+                replacement_seq = indep.seq2[con_ref]
+                replacement_seq_hot = torch.nn.functional.one_hot(replacement_seq, num_classes=80)
+
+                seq_out[con_hal] = replacement_seq_hot
+                seq_stack[-1] = seq_out
+                seq_t = seq_out
                 break # refinement only needs a single step through the loop
 
         # if doing new symmetry, dump full complex:
