@@ -83,27 +83,29 @@ def main():
             df_accum = df_accum.merge(tmp, on='name', how='outer')
 
         # chemnet
-        tmp = pd.concat([
-            pd.read_csv(fn,index_col=None) for fn in glob.glob(mpnn_dir+'/chemnet_scores.csv.*')
-        ])
-        if len(tmp)>0:
-            chemnet1 = tmp.groupby('label',as_index=False).max()[['label','plddt','plddt_lp','lddt']]
-            chemnet2 = tmp.groupby('label',as_index=False).min()[['label','lrmsd','kabsch']]
-            chemnet3 = tmp.groupby('label',as_index=False).mean()[['label','lrmsd','kabsch']]
-            colnames = tmp.columns[1:]
-            chemnet = chemnet1.merge(chemnet2, on='label').rename(
-                columns={col:'cn_'+col+'_best' for col in colnames})
-            chemnet = chemnet.merge(chemnet3, on='label').rename(
-                columns={col:'cn_'+col+'_mean' for col in colnames})
-            chemnet = chemnet.rename(columns={'label':'name'})
-            df_accum = df_accum.merge(chemnet, on='name', how='outer')
+        if len(glob.glob(mpnn_dir+'/chemnet_scores.csv.*')) > 0:
+            tmp = pd.concat([
+                pd.read_csv(fn,index_col=None) for fn in glob.glob(mpnn_dir+'/chemnet_scores.csv.*')
+            ])
+            if len(tmp)>0:
+                chemnet1 = tmp.groupby('label',as_index=False).max()[['label','plddt','plddt_lp','lddt']]
+                chemnet2 = tmp.groupby('label',as_index=False).min()[['label','lrmsd','kabsch']]
+                chemnet3 = tmp.groupby('label',as_index=False).mean()[['label','lrmsd','kabsch']]
+                colnames = tmp.columns[1:]
+                chemnet = chemnet1.merge(chemnet2, on='label').rename(
+                    columns={col:'cn_'+col+'_best' for col in colnames})
+                chemnet = chemnet.merge(chemnet3, on='label').rename(
+                    columns={col:'cn_'+col+'_mean' for col in colnames})
+                chemnet = chemnet.rename(columns={'label':'name'})
+                df_accum = df_accum.merge(chemnet, on='name', how='outer')
 
         # rosetta ligand
-        tmp = pd.concat([
-            pd.read_csv(fn,index_col=None) for fn in glob.glob(mpnn_dir+'/rosettalig_scores.csv.*')
-        ])
-        if len(tmp)>0:
-            df_accum = df_accum.merge(tmp, on='name', how='outer')
+        if len(glob.glob(mpnn_dir+'/rosettalig_scores.csv.*')) > 0:
+            tmp = pd.concat([
+                pd.read_csv(fn,index_col=None) for fn in glob.glob(mpnn_dir+'/rosettalig_scores.csv.*')
+            ])
+            if len(tmp)>0:
+                df_accum = df_accum.merge(tmp, on='name', how='outer')
 
         # mpnn likelihoods
         mpnn_scores = load_mpnn_scores(mpnn_dir)

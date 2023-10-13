@@ -20,7 +20,7 @@ sys.path.insert(0,script_dir+'/../RF2-allatom/')
 import inference.utils
 import rf2aa.parsers
 import rf2aa.chemical
-from rf2aa.parsers import load_ligand_from_pdb
+#from rf2aa.parsers import load_ligand_from_pdb
 from rf2aa.util import kabsch
 
 
@@ -30,7 +30,7 @@ sys.path.insert(0,script_dir+'/../RF2-allatom/')
 import inference.utils
 import rf2aa.parsers
 import rf2aa.chemical
-from rf2aa.parsers import load_ligand_from_pdb
+#from rf2aa.parsers import load_ligand_from_pdb
 from rf2aa.util import kabsch
 
 
@@ -124,7 +124,7 @@ def main():
             for i in range(n_designs):
                 print('writing file', args.outdir+name+f"_{i}.pdb")
                 seq = lines[2*i + 3].strip() # 2nd seq is 1st design
-                seq_num = torch.tensor([rf2aa.util.aa2num[rf2aa.util.aa_123[a]] for a in seq])
+                seq_num = torch.tensor([rf2aa.chemical.aa2num[rf2aa.chemical.aa_123[a]] for a in seq])
                 pdbstr = rf2aa.util.writepdb(
                     args.outdir+name+f"_{i}.pdb",
                     atoms = xyz,
