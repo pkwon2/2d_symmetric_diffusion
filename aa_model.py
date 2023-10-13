@@ -719,7 +719,10 @@ class Model:
             # only inputting motif in 2d template --> need 3rd template 
             xyz_t  = torch.zeros(1,3,L,3)
             t2d    = torch.zeros(1,3,L,L,68)
-            mask_t = torch.ones(1,3,L,L).bool()
+
+            ## BUGFIX - the third mask needs to be altered 
+            mask_t = torch.ones(1,3,L,L).bool() 
+            mask_t[0,2,:,:] = t2d_is_revealed.bool()
 
             ##### 2nd template #####
             t2d_xt, mask_t_2d_remade = util.get_t2d(xyz, indep.is_sm, indep.atom_frames)
