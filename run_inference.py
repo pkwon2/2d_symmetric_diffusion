@@ -278,7 +278,7 @@ def sample_one(sampler, simple_logging=False):
             # replace frames 
             if sampler._conf.preprocess.eye_frames:
                 print('WARNING: replacing all frames with EYE regardless of motif/nonmotif')
-                indep.xyz = aa_model.eye_frames2(indep.xyz, center=True) # 
+                indep.xyz = aa_model.eye_frames2(indep.xyz, center=False) # 
             elif sampler._conf.preprocess.randomize_frames:
                 print('WARNING: replacing all frames with RANDOM regardless of motif/nonmotif')
                 indep.xyz = aa_model.randomly_rotate_frames(indep.xyz)
@@ -334,8 +334,7 @@ def sample_one(sampler, simple_logging=False):
             # put first asu in 
             xyz_particle[:Lasu,:14]   = px0[:Lasu]
 
-            ic(seq_particle.shape)
-            ic(seq_t.shape)
+
             seq_particle[:Lasu] = torch.argmax( seq_t[:Lasu] )
 
             for i in range(1,O):
@@ -370,10 +369,12 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
     bfacts = torch.ones_like(final_seq.squeeze())
 
     # replace mask and unknown tokens in the final seq with alanine
+    final_seq = indep.seq # dj hack for now
     final_seq = torch.where((final_seq == 20) | (final_seq==21), 0, final_seq)
 
     # determine lengths of protein and ligand for correct chain labeling in output pdb
-    sm_mask = rf2aa.util.is_atom(final_seq)
+    # sm_mask = rf2aa.util.is_atom(final_seq)
+    sm_mask = indep.is_sm
     chain_Ls = [len(sm_mask)-sm_mask.sum(), sm_mask.sum()] # assumes 1 protein followed by 1 ligand
     
     # pX0 last step

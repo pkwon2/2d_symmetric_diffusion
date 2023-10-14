@@ -1211,6 +1211,15 @@ class NRBStyleSelfCond(Sampler):
 
 
         con_hal_idx0 = torch.from_numpy( self.contig_map.get_mappings()['con_hal_idx0'] )
+
+
+        # Assume that SM input will always be motif!! 
+        if indep.is_sm.any():
+            print('Detected small molecule in input - assuming it is a motif chunk.')
+            # where is sm in hal? 
+            where_is_sm = torch.where(indep.is_sm)[0]
+            # add it to con_hal_idx0
+            con_hal_idx0 = torch.cat([con_hal_idx0, where_is_sm], dim=0)
         
 
         is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig 
@@ -1248,6 +1257,8 @@ class NRBStyleSelfCond(Sampler):
                 if refine: 
                     is_protein_motif[src_con_hal_idx0] = True
 
+                is_motif = is_protein_motif.clone() | indep.is_sm # Assumes any small molecule is a motif chunk
+
                 # t2d_is_revealed
                 L = len(is_protein_motif)
                 mask_t2d = torch.zeros((L,L))
@@ -1263,14 +1274,17 @@ class NRBStyleSelfCond(Sampler):
                 mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, 1, supplied_full_contig=True)
             
             else:
+                # repeat/symmetric case
                 assert not refine, 'refine not yet implemented for symmetry/repeat' 
                 assert type(self._conf.inference.n_repeats) is int        # must be present 
                 is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig  # should be appropriate length 
+
 
                 if is_protein_motif.sum() == len(con_hal_idx0):
                     supplied_full_contig = True
                     print('Detected full contig supplied--------------')
                 else: 
+                    print('Detected ASU contig supplied--------------')
                     supplied_full_contig = False
 
 
@@ -1279,7 +1293,11 @@ class NRBStyleSelfCond(Sampler):
                 L = len(is_protein_motif)
                 mask_t2d = parse_ij_get_repeat_mask(self._conf.inference.ij_visible, L, n_repeat, con_hal_idx0, supplied_full_contig)
 
+
+                is_motif = is_protein_motif.clone() | indep.is_sm # Assumes any small molecule is a motif chunk
+
         else: 
+            raise Exception('3D motif not implemented yet')
             # non-motif is diffused, motif given in 3d  
             assert self._conf.model.symmetrize_repeats, 'assumes repeat protein inferences for now'
             is_protein_motif = ~indep.is_sm * ~self.diffuser_is_diffused.repeat(self._conf.inference.n_repeats)
@@ -1290,7 +1308,7 @@ class NRBStyleSelfCond(Sampler):
             mask_t2d = parse_ij_get_repeat_mask(self._conf.inference.ij_visible, L, n_repeat, con_hal_idx0)
 
 
-        return is_protein_motif, mask_t2d
+        return is_motif, mask_t2d
     
 
     def sample_step(self, t, indep, rfo):

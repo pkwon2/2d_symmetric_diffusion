@@ -153,7 +153,7 @@ def filter_het(pdb_lines, ligand):
         if l[17:17+4].strip() != ligand:
             continue
         lines.append(l)
-        hetatm_ids.append(int(l[7:7+6].strip()))
+        hetatm_ids.append(int(l[7:7+5].strip()))
     
     for l in pdb_lines:
         if 'CONECT' not in l:
@@ -162,6 +162,7 @@ def filter_het(pdb_lines, ligand):
         if all(i in hetatm_ids for i in ids):
             lines.append(l)
             continue
+
         if any(i in hetatm_ids for i in ids):
             raise Exception(f'line {l} references atom ids in the target ligand {ligand} and another atom')
     return lines
@@ -286,6 +287,8 @@ class Model:
             chirals = get_chirals(mol, xyz_sm[0])
             if chirals.numel() !=0:
                 chirals[:,:-1] += protein_L
+
+            # seq2chars = lambda x: '-'.join([rf2aa.chemical.num2aa[e] for e in x])
 
         else:
             Ls = [msa_prot.shape[-1], 0]
