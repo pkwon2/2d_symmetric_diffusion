@@ -1214,7 +1214,7 @@ class NRBStyleSelfCond(Sampler):
 
 
         # Assume that SM input will always be motif!! 
-        if indep.is_sm.any():
+        if indep.is_sm.any() and not refine:
             print('Detected small molecule in input - assuming it is a motif chunk.')
             # where is sm in hal? 
             where_is_sm = torch.where(indep.is_sm)[0]
@@ -1267,6 +1267,11 @@ class NRBStyleSelfCond(Sampler):
                 ij_visible = self._conf.inference.ij_visible
                 if refine: 
                     ij_visible = ref_dict['ij_visible']
+                    # if we had ligand, remove last character from ij_visible 
+                    if ref_dict['ligand']: 
+                        print('WARNING: Popping detected ligand chunk from reference ij_visible')
+                        ij_visible = ij_visible[:-1]
+
                 assert ij_visible is not None, '3 template + motif_only_2d requires description of motif pairwise visibility'
                 ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
                 ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]

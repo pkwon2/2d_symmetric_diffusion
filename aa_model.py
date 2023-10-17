@@ -357,6 +357,7 @@ class Model:
             ref_dict['ij_visible'] = ij_visible
             ref_dict['con_ref_idx0'] = data['con_ref_idx0']
             ref_dict['con_hal_idx0'] = data['con_hal_idx0']
+            ref_dict['ligand'] = conf['inference']['ligand']
 
             metadata['refinement'] = ref_dict
 
