@@ -21,6 +21,8 @@ aa_se3_path = os.path.join(script_dir, 'RF2-allatom/rf2aa/SE3Transformer')
 sys.path.insert(0, aa_se3_path)
 sys.path.append(os.path.join(script_dir, 'RF2-allatom'))
 
+import pdb
+from kinematics import th_kabsch
 import re
 import os, time, pickle
 import dataclasses
@@ -315,8 +317,68 @@ def sample_one(sampler, simple_logging=False):
                 replacement_seq_hot = torch.nn.functional.one_hot(replacement_seq, num_classes=80)
 
                 seq_out[con_hal] = replacement_seq_hot
-                seq_stack[-1] = seq_out
+                seq_stack[:] = seq_out[None].repeat(len(seq_stack),1,1)
                 seq_t = seq_out
+
+
+                # place the sidechains from the native motif into the final design
+                ref_sc_crds = indep.xyz2[con_ref]
+                ref_sc_crds = torch.cat((ref_sc_crds, torch.zeros((len(ref_sc_crds), 22, 3))), dim=1)
+                hal_bb_crds = px0_xyz_stack[-1][con_hal,:3,:]
+
+                # get torsions from native motif --> build into refined model
+                converter = rf2aa.util_module.XYZConverter()
+                tors, tors_alt, tors_mask, tors_planar = converter.get_torsions(ref_sc_crds[None], replacement_seq[None])
+                # fix HIS torsions... HACKY. Third tors should be zero
+                ic(tors.shape)
+                is_his = replacement_seq == 8 
+                tors[0,is_his,2,0] = torch.sin(torch.tensor([0.0]))
+                tors[0,is_his,2,1] = torch.cos(torch.tensor([0.0]))
+                hal_allatom_crds = converter.compute_all_atom(replacement_seq[None], hal_bb_crds[None], tors)
+                (RTframes, xyz_full) = hal_allatom_crds
+                denoised_xyz_stack[-1][con_hal] = xyz_full[0,:,:14]
+
+                # finally - align this refined model to native on motif bb, add SM, dump
+                motif_xyz_refined = denoised_xyz_stack[-1][con_hal,:3,:] 
+                motif_xyz_native = indep.xyz2[con_ref,:3,:]
+                T_native = motif_xyz_native[:,:3,:].reshape(-1,3).mean(dim=0) # centroid of native motif bb
+                T_refined = motif_xyz_refined[:,:3,:].reshape(-1,3).mean(dim=0) # centroid of refined motif bb
+
+                # get rotation matrix to align native motif to refined motif
+                ic(motif_xyz_native[:,:3,:].shape)
+                ic(motif_xyz_refined[:,:3,:].shape)
+                rms, _, R = th_kabsch(motif_xyz_native[:,:3,:].reshape(-1,3), motif_xyz_refined[:,:3,:].reshape(-1,3))
+                ic(rms)
+                # denoised_xyz_stack[-1] = torch.einsum('ij,raj->rai', R, denoised_xyz_stack[-1]-T_refined) + T_native
+                denoised_xyz_stack[-1] = torch.einsum('lai,ij->laj', denoised_xyz_stack[-1]-T_refined, R) + T_native
+
+                # now add SM crds 
+                
+                xyz_sm = indep.metadata['refinement']['xyz_sm']
+                L_sm = len(xyz_sm.squeeze())
+                xyz_sm_compat = torch.zeros((L_sm, 14,3))
+                xyz_sm_compat[:,1,:] = xyz_sm.squeeze()
+
+                msa_sm = indep.metadata['refinement']['msa_sm'].squeeze()
+                # pdb.set_trace()
+                denoised_xyz_stack[-1]  =  torch.cat((denoised_xyz_stack[-1], xyz_sm_compat), dim=0)
+                hot_seq_sm = torch.nn.functional.one_hot(msa_sm, num_classes=80)
+                seq_out = torch.cat((seq_out, hot_seq_sm), dim=0)
+                seq_stack = seq_out[None].repeat(len(seq_stack),1,1)
+
+
+                Lsm = len(xyz_sm.squeeze())
+                Ltot = len(seq_out.squeeze())
+                Lprot = Ltot - Lsm
+                bond_feats = torch.zeros((Ltot, Ltot))
+                # pdb.set_trace()
+                bond_feats[:Lprot,:Lprot] = rf2aa.util.get_protein_bond_feats(Lprot)
+                bond_sm = indep.metadata['refinement']['bond_feats_sm']
+                bond_feats[Lprot:,Lprot:] = bond_sm
+                indep.bond_feats = bond_feats
+                indep.is_sm = rf2aa.util.is_atom(seq_out.argmax(dim=-1))
+                 
+
                 break # refinement only needs a single step through the loop
 
         # if doing new symmetry, dump full complex:
@@ -370,6 +432,8 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
 
     # replace mask and unknown tokens in the final seq with alanine
     final_seq = indep.seq # dj hack for now
+    if sampler.inf_conf.refine: 
+        final_seq = seq_stack[0].argmax(dim=-1)
     final_seq = torch.where((final_seq == 20) | (final_seq==21), 0, final_seq)
 
     # determine lengths of protein and ligand for correct chain labeling in output pdb
@@ -379,6 +443,7 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
     
     # pX0 last step
     out = f'{out_prefix}.pdb'
+    # pdb.set_trace()
     aa_model.write_traj(out, denoised_xyz_stack[0:1], final_seq, indep.bond_feats, chain_Ls=chain_Ls)
     des_path = os.path.abspath(out)
 
@@ -399,41 +464,43 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
             rf2aa.util.writepdb_file(f, xyz_particle.cpu(), seq_particle.long(), chain_Ls=chain_Ls_symm)
 
     # trajectory pdbs
-    traj_prefix = os.path.dirname(out_prefix)+'/traj/'+os.path.basename(out_prefix)
-    os.makedirs(os.path.dirname(traj_prefix), exist_ok=True)
+    if not sampler.inf_conf.refine:
+        traj_prefix = os.path.dirname(out_prefix)+'/traj/'+os.path.basename(out_prefix)
+        os.makedirs(os.path.dirname(traj_prefix), exist_ok=True)
 
-    out = f'{traj_prefix}_Xt-1_traj.pdb'
-    aa_model.write_traj(out, denoised_xyz_stack, final_seq, indep.bond_feats, chain_Ls=chain_Ls)
-    xt_traj_path = os.path.abspath(out)
+        out = f'{traj_prefix}_Xt-1_traj.pdb'
+        aa_model.write_traj(out, denoised_xyz_stack, final_seq, indep.bond_feats, chain_Ls=chain_Ls)
+        xt_traj_path = os.path.abspath(out)
 
-    out=f'{traj_prefix}_pX0_traj.pdb'
-    aa_model.write_traj(out, px0_xyz_stack, final_seq, indep.bond_feats, chain_Ls=chain_Ls)
-    x0_traj_path = os.path.abspath(out)
+        out=f'{traj_prefix}_pX0_traj.pdb'
+        aa_model.write_traj(out, px0_xyz_stack, final_seq, indep.bond_feats, chain_Ls=chain_Ls)
+        x0_traj_path = os.path.abspath(out)
 
-    # run metadata
-    sampler._conf.inference.input_pdb = os.path.abspath(sampler._conf.inference.input_pdb)
-    indep_out ={}
-    for k,v in dataclasses.asdict(indep).items():
-        if torch.is_tensor(v):
-            indep_out[k] = v.detach().cpu().numpy()
-        else:
-            indep_out[k] = v
+        # run metadata
+        sampler._conf.inference.input_pdb = os.path.abspath(sampler._conf.inference.input_pdb)
+        indep_out ={}
+        for k,v in dataclasses.asdict(indep).items():
+            if torch.is_tensor(v):
+                indep_out[k] = v.detach().cpu().numpy()
+            else:
+                indep_out[k] = v
 
-    trb = dict(
-        config = OmegaConf.to_container(sampler._conf, resolve=True),
-        device = torch.cuda.get_device_name(torch.cuda.current_device()) if torch.cuda.is_available() else 'CPU',
-        px0_xyz_stack = px0_xyz_stack.detach().cpu().numpy(),
-        indep=indep_out,
-    )
-    if hasattr(sampler, 'contig_map'):
-        for key, value in sampler.contig_map.get_mappings().items():
-            trb[key] = value
-    with open(f'{out_prefix}.trb','wb') as f_out:
-        pickle.dump(trb, f_out)
+        trb = dict(
+            config = OmegaConf.to_container(sampler._conf, resolve=True),
+            device = torch.cuda.get_device_name(torch.cuda.current_device()) if torch.cuda.is_available() else 'CPU',
+            px0_xyz_stack = px0_xyz_stack.detach().cpu().numpy(),
+            indep=indep_out,
+        )
+        if hasattr(sampler, 'contig_map'):
+            for key, value in sampler.contig_map.get_mappings().items():
+                trb[key] = value
+        with open(f'{out_prefix}.trb','wb') as f_out:
+            pickle.dump(trb, f_out)
 
     log.info(f'design : {des_path}')
-    log.info(f'Xt traj: {xt_traj_path}')
-    log.info(f'X0 traj: {x0_traj_path}')
+    if not sampler.inf_conf.refine:
+        log.info(f'Xt traj: {xt_traj_path}')
+        log.info(f'X0 traj: {x0_traj_path}')
 
 
 if __name__ == '__main__':

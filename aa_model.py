@@ -358,6 +358,31 @@ class Model:
             ref_dict['con_ref_idx0'] = data['con_ref_idx0']
             ref_dict['con_hal_idx0'] = data['con_hal_idx0']
             ref_dict['ligand'] = conf['inference']['ligand']
+            
+            # get sm data 
+            if ref_dict['ligand'] is not None: 
+                with open(src_pdb, 'r') as fh:
+                    stream = [l for l in fh if "HETATM" in l or "CONECT" in l]
+                ligand = ref_dict['ligand']
+                stream = filter_het(stream, ligand)
+
+                if not len(stream):
+                    raise Exception(f'ligand {ligand} not found in pdb: {pdb}')
+
+                mol_refine, msa_sm_refine, ins_sm_refine, xyz_sm_refine, _ = parsers.parse_mol("".join(stream), filetype="pdb", string=True)
+                # a3m_sm_refine = {"msa": msa_sm_refine.unsqueeze(0), "ins": ins_sm_refine.unsqueeze(0)}
+                # G_refine = rf2aa.util.get_nxgraph(mol)
+                
+                # index 0 - offset from current residue/atom. 0 is the current residue/atom
+                # index 1 - which atom in the residue (0 indexed)
+                # atom_frames_refine = rf2aa.util.get_atom_frames(msa_sm, G)
+                # N_symmetry_refine, sm_L_refine, _ = xyz_sm.shape
+                # a3m = merge_a3m_hetero(a3m_prot, a3m_sm, Ls)
+
+
+                ref_dict['msa_sm'] = msa_sm_refine
+                ref_dict['xyz_sm'] = xyz_sm_refine
+                ref_dict['bond_feats_sm'] = rf2aa.util.get_bond_feats(mol_refine)
 
             metadata['refinement'] = ref_dict
 
