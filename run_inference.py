@@ -374,9 +374,9 @@ def sample_one(sampler, simple_logging=False):
                 # compute RMSD
                 sc_rmsd = torch.sqrt( ((heavy_sc_con_hal-heavy_sc_con_ref)**2).sum(dim=-1).mean() )
 
-                remarks = [ 'REMARK 0 next line is N-CA-C rms'
+                remarks = [ 'REMARK 0 next line is N-CA-C rms',
                             f'REMARK 0 BACKBONE_RMSD {rms.item():.3f}',
-                            'REMARK 0 Next line is SC heavy RMS with BB included, aligned on BB'
+                            'REMARK 0 Next line is SC heavy RMS with BB included, aligned on BB',
                             f'REMARK 0 SIDECHAIN_RMSD {sc_rmsd.item():.3f}']
 
                 # now add SM crds 
