@@ -306,6 +306,8 @@ def sample_one(sampler, simple_logging=False):
             denoised_xyz_stack.append(x_t)
             seq_stack.append(seq_t)
 
+            remarks=[]
+
             if sampler.inf_conf.refine:
                 print('Breaking loop because doing refinement')
                 # have sequence of the native motif as the final sequence in the pdb, all else ala 
@@ -330,10 +332,12 @@ def sample_one(sampler, simple_logging=False):
                 converter = rf2aa.util_module.XYZConverter()
                 tors, tors_alt, tors_mask, tors_planar = converter.get_torsions(ref_sc_crds[None], replacement_seq[None])
                 # fix HIS torsions... HACKY. Third tors should be zero
-                ic(tors.shape)
+                
                 is_his = replacement_seq == 8 
-                tors[0,is_his,2,0] = torch.sin(torch.tensor([0.0]))
-                tors[0,is_his,2,1] = torch.cos(torch.tensor([0.0]))
+
+                tors[0,is_his,5,0] = torch.cos(torch.tensor(0.0))
+                tors[0,is_his,5,1] = torch.sin(torch.tensor(0.0))
+
                 hal_allatom_crds = converter.compute_all_atom(replacement_seq[None], hal_bb_crds[None], tors)
                 (RTframes, xyz_full) = hal_allatom_crds
                 denoised_xyz_stack[-1][con_hal] = xyz_full[0,:,:14]
@@ -345,15 +349,37 @@ def sample_one(sampler, simple_logging=False):
                 T_refined = motif_xyz_refined[:,:3,:].reshape(-1,3).mean(dim=0) # centroid of refined motif bb
 
                 # get rotation matrix to align native motif to refined motif
-                ic(motif_xyz_native[:,:3,:].shape)
-                ic(motif_xyz_refined[:,:3,:].shape)
                 rms, _, R = th_kabsch(motif_xyz_native[:,:3,:].reshape(-1,3), motif_xyz_refined[:,:3,:].reshape(-1,3))
-                ic(rms)
-                # denoised_xyz_stack[-1] = torch.einsum('ij,raj->rai', R, denoised_xyz_stack[-1]-T_refined) + T_native
                 denoised_xyz_stack[-1] = torch.einsum('lai,ij->laj', denoised_xyz_stack[-1]-T_refined, R) + T_native
 
-                # now add SM crds 
+                # compute sidechain RMSD when aligned on backbone
+                heavy_sc_con_hal = []
+                heavy_sc_con_ref = []
+                for i,scxyz_hal in enumerate(denoised_xyz_stack[-1][con_hal]):
+                    # seq_i
+                    si = replacement_seq[i]
+                    scxyz_ref = indep.xyz2[con_ref][i]
+
+                    for j,aname in enumerate(rf2aa.chemical.aa2long[si]):
+                        if aname is None: 
+                            break 
+                        heavy_sc_con_hal.append(scxyz_hal[j])
+                        heavy_sc_con_ref.append(scxyz_ref[j])
                 
+                heavy_sc_con_hal = torch.stack(heavy_sc_con_hal)
+                heavy_sc_con_ref = torch.stack(heavy_sc_con_ref)
+                assert not torch.isnan(heavy_sc_con_hal).any()
+                assert not torch.isnan(heavy_sc_con_ref).any()
+
+                # compute RMSD
+                sc_rmsd = torch.sqrt( ((heavy_sc_con_hal-heavy_sc_con_ref)**2).sum(dim=-1).mean() )
+
+                remarks = [ 'REMARK 0 next line is N-CA-C rms'
+                            f'REMARK 0 BACKBONE_RMSD {rms.item():.3f}',
+                            'REMARK 0 Next line is SC heavy RMS with BB included, aligned on BB'
+                            f'REMARK 0 SIDECHAIN_RMSD {sc_rmsd.item():.3f}']
+
+                # now add SM crds 
                 xyz_sm = indep.metadata['refinement']['xyz_sm']
                 L_sm = len(xyz_sm.squeeze())
                 xyz_sm_compat = torch.zeros((L_sm, 14,3))
@@ -413,9 +439,9 @@ def sample_one(sampler, simple_logging=False):
         px0_xyz_stack = torch.stack(px0_xyz_stack)
         px0_xyz_stack = torch.flip(px0_xyz_stack, [0,])
 
-        return indep, denoised_xyz_stack, px0_xyz_stack, seq_stack, xyz_particle, seq_particle, Lasu
+        return indep, denoised_xyz_stack, px0_xyz_stack, seq_stack, xyz_particle, seq_particle, Lasu, remarks
 
-def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, seq_stack, xyz_particle, seq_particle, Lasu):
+def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, seq_stack, xyz_particle, seq_particle, Lasu, remarks=[]):
     log = logging.getLogger(__name__)
     # Save outputs 
     os.makedirs(os.path.dirname(out_prefix), exist_ok=True)
@@ -444,7 +470,13 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
     # pX0 last step
     out = f'{out_prefix}.pdb'
     # pdb.set_trace()
-    aa_model.write_traj(out, denoised_xyz_stack[0:1], final_seq, indep.bond_feats, chain_Ls=chain_Ls)
+    aa_model.write_traj(out, 
+                        denoised_xyz_stack[0:1], 
+                        final_seq, 
+                        indep.bond_feats, 
+                        chain_Ls=chain_Ls, 
+                        remarks=remarks) 
+    
     des_path = os.path.abspath(out)
 
     # symmetric oligomer PDB dump (New point symmetry protocol)
