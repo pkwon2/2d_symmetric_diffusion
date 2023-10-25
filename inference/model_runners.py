@@ -1335,6 +1335,18 @@ class NRBStyleSelfCond(Sampler):
         twotemplate   = self.inf_conf.two_template
         threetemplate = self.inf_conf.three_template
 
+        # if it's first step, need to save first prediction for alignment later 
+        px0_needs_align = False 
+        first_px0_needs_save = False
+        if ((not self.inf_conf.refine) and (self.inf_conf.align_px0_motif)): 
+
+            if t == self._conf.diffuser.T:
+                first_px0_needs_save = True # save first one 
+            else: 
+                px0_needs_align = True
+        
+
+
         if (twotemplate and threetemplate):
             is_protein_motif, t2d_is_revealed = self._get_3template_masks(indep)
         else:
@@ -1567,6 +1579,18 @@ class NRBStyleSelfCond(Sampler):
         px0         = rfo.get_xyz()[:,:14]
         logits      = rfo.get_seq_logits()
         seq_decoded = [rf2aa.chemical.num2aa[s] for s in rfi.seq[0]]
+
+        if first_px0_needs_save:
+            self.first_px0 = px0.clone()
+        elif px0_needs_align:
+            con_hal = torch.from_numpy(self.contig_map.get_mappings()['con_hal_idx0']).to(device=self.first_px0.device)
+            px0,motif_rms = aa_model.align_on_motif(self.first_px0.float(), 
+                                                    px0.float(), 
+                                                    con_hal)
+            self._log.info(f'Motif RMSD relative to first prediction: {motif_rms}')
+        else: 
+            # nothing 
+            pass
 
         logits = logits.float()
         px0    = px0.float()

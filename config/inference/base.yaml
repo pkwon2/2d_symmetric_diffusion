@@ -60,6 +60,7 @@ inference:
   supply_motif_seq: False
   refine_recycles: -1
   refine: False
+  align_px0_motif: True
 
 
 contigmap:

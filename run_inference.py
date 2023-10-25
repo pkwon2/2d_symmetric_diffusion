@@ -269,7 +269,7 @@ def sample_one(sampler, simple_logging=False):
         rfo = None
 
         # Loop over number of reverse diffusion time steps.
-        for t in range(int(sampler.t_step_input), sampler.inf_conf.final_step-1, -1):
+        for i_timestep,t in enumerate(range(int(sampler.t_step_input), sampler.inf_conf.final_step-1, -1)):
             if simple_logging:
                 e = '.'
                 if t%10 == 0:
@@ -517,6 +517,7 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
             else:
                 indep_out[k] = v
 
+    if not sampler.inf_conf.refine:
         trb = dict(
             config = OmegaConf.to_container(sampler._conf, resolve=True),
             device = torch.cuda.get_device_name(torch.cuda.current_device()) if torch.cuda.is_available() else 'CPU',
@@ -528,6 +529,11 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
                 trb[key] = value
         with open(f'{out_prefix}.trb','wb') as f_out:
             pickle.dump(trb, f_out)
+
+    else: 
+        # symlink to the original diffusion trb file if refining
+        orig_trb = indep.metadata['refinement']['src_trb']
+        os.symlink(orig_trb, f'{out_prefix}.trb')
 
     log.info(f'design : {des_path}')
     if not sampler.inf_conf.refine:

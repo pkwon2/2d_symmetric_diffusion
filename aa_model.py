@@ -27,6 +27,8 @@ from typing import Optional
 from rf2aa.util_module import XYZConverter
 import rotation_conversions
 
+from kinematics import th_kabsch
+
 
 NINDEL=1
 NTERMINUS=2
@@ -143,6 +145,26 @@ class RFO:
     
     def get_xyz(self):
         return self.xyz_allatom[0]
+    
+def align_on_motif(a,b, con_hal_idx0):
+    """
+    Aligns b onto a using Kabsch algorithm.
+    """
+    def centroid(X):
+        # return the mean X,Y,Z down the atoms
+        return torch.mean(X, dim=0, keepdim=True)
+    
+    a_motif = a[con_hal_idx0,:3,:].reshape(-1,3)
+    a_centroid = centroid(a_motif)
+    b_motif = b[con_hal_idx0,:3,:].reshape(-1,3)
+    b_centroid = centroid(b_motif)
+
+    rms, _, R = th_kabsch(a_motif, b_motif) 
+
+    b_aligned = torch.matmul(b-b_centroid, R) + a_centroid
+
+    return b_aligned, rms.item()
+
 
 def filter_het(pdb_lines, ligand):
     lines = []
@@ -383,6 +405,7 @@ class Model:
                 ref_dict['msa_sm'] = msa_sm_refine
                 ref_dict['xyz_sm'] = xyz_sm_refine
                 ref_dict['bond_feats_sm'] = rf2aa.util.get_bond_feats(mol_refine)
+                ref_dict['src_trb'] = trb
 
             metadata['refinement'] = ref_dict
 
