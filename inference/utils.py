@@ -776,8 +776,8 @@ class Denoise():
         # DJ - I altered self.align_to_xt_motif to do a different alignment
         #      Commenting both out for now. Next line was using original functionality,
         #      Line after that uses new functionality which aligns xt motif to px0 motif
-        if align_motif and diffusion_mask.any():
-            px0 = self.align_to_xt_motif(px0, xt, diffusion_mask)
+        # if align_motif and diffusion_mask.any():
+        #     px0 = self.align_to_xt_motif(px0, xt, diffusion_mask)
         # xT_motif_aligned = self.align_to_xt_motif(px0, xt, diffusion_mask)
 
         px0=px0.to(xt.device)

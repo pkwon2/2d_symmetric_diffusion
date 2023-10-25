@@ -22,7 +22,6 @@ def th_kabsch(A,B):
         R - rotation matrix to superimpose B onto A
         rB - the rotated B coordinates
     """
-
     def centroid(X):
         # return the mean X,Y,Z down the atoms
         return torch.mean(X, dim=0, keepdim=True)
@@ -40,13 +39,13 @@ def th_kabsch(A,B):
     B = B - centroid(B)
 
     # computation of the covariance matrix
-    C = np.matmul(A.T, B)
+    C = torch.matmul(A.T, B)
 
     # compute optimal rotation matrix using SVD
     U,S,Vt = torch.svd(C)
 
     # ensure right handed coordinate system
-    d = torch.eye(3)
+    d = torch.eye(3).to(A.device)
     d[-1,-1] = torch.sign(torch.det(Vt@U.T))
 
     # construct rotation matrix
