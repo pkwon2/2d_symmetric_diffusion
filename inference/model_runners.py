@@ -1219,9 +1219,8 @@ class NRBStyleSelfCond(Sampler):
             # where is sm in hal? 
             where_is_sm = torch.where(indep.is_sm)[0]
             # add it to con_hal_idx0
-            con_hal_idx0 = torch.cat([con_hal_idx0, where_is_sm], dim=0)
+            con_hal_idx0 = torch.cat([con_hal_idx0, where_is_sm], dim=0).long()
         
-
         is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig 
 
         if refine: 
@@ -1230,13 +1229,19 @@ class NRBStyleSelfCond(Sampler):
             # src_con_ref_idx0 = torch.from_numpy( ref_dict['src_con_ref_idx0'] )
             
             assert is_protein_motif.sum() == 0
-            is_protein_motif[src_con_hal_idx0] = True 
-            con_hal_idx0 = src_con_hal_idx0
+
+            if len(src_con_hal_idx0) > 0:
+                is_protein_motif[src_con_hal_idx0] = True 
+                con_hal_idx0 = src_con_hal_idx0
+            else:
+                L = len(is_protein_motif)
+                mask_t2d = torch.zeros((L,L))
+                return is_protein_motif, mask_t2d
 
 
 
-        if not torch.any(is_protein_motif):
-            # no motifs, blank masks 
+        if not torch.any(is_protein_motif) and not self._conf.inference.ligand:
+            # no motifs and no ligands --> blank masks 
             L = len(is_protein_motif)
             mask_t2d = torch.zeros((L,L))
             return is_protein_motif, mask_t2d
@@ -1582,11 +1587,18 @@ class NRBStyleSelfCond(Sampler):
 
         if first_px0_needs_save:
             self.first_px0 = px0.clone()
+        
         elif px0_needs_align:
             con_hal = torch.from_numpy(self.contig_map.get_mappings()['con_hal_idx0']).to(device=self.first_px0.device)
+            
+            if indep.is_sm.any():
+                where_is_sm = torch.where(indep.is_sm)[0].to(device=self.first_px0.device)
+                con_hal = torch.cat([con_hal, where_is_sm], dim=0).long()
+
             px0,motif_rms = aa_model.align_on_motif(self.first_px0.float(), 
                                                     px0.float(), 
                                                     con_hal)
+            
             self._log.info(f'Motif RMSD relative to first prediction: {motif_rms}')
         else: 
             # nothing 

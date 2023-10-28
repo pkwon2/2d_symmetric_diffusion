@@ -184,10 +184,16 @@ def sample(sampler):
         sampler_out = sample_one(sampler)
         log.info(f'Finished design in {(time.time()-start_time)/60:.2f} minutes')
         save_outputs(sampler, out_prefix, *sampler_out)
+
+        # # hacky - if refine, set conf ligand here so that atoms are renamed
+        # if sampler.inf_conf.refine:
+        #     if sampler_out[0].metadata['refinement']['ligand'] is not None:
+        #         sampler._conf.inference.ligand = sampler_out[0].metadata['refinement']['ligand']
  
         # TEMPORARY HACK (jue): Rename ligand and ligand atoms
         if sampler._conf.inference.ligand:
             rename_ligand_atoms(sampler._conf.inference.input_pdb, out_prefix+'.pdb')
+        
 
 def rename_ligand_atoms(ref_fn, out_fn):
     """Copies names of ligand residue and ligand heavy atoms from input pdb
@@ -280,7 +286,7 @@ def sample_one(sampler, simple_logging=False):
             # replace frames 
             if sampler._conf.preprocess.eye_frames:
                 print('WARNING: replacing all frames with EYE regardless of motif/nonmotif')
-                indep.xyz = aa_model.eye_frames2(indep.xyz, center=False) # 
+                indep.xyz = aa_model.eye_frames2(indep.xyz, center=True) # 
             elif sampler._conf.preprocess.randomize_frames:
                 print('WARNING: replacing all frames with RANDOM regardless of motif/nonmotif')
                 indep.xyz = aa_model.randomly_rotate_frames(indep.xyz)
@@ -315,94 +321,116 @@ def sample_one(sampler, simple_logging=False):
                 
                 con_ref = indep.metadata['refinement']['con_ref_idx0']
                 con_hal = indep.metadata['refinement']['con_hal_idx0']
-                replacement_seq = indep.seq2[con_ref]
-                replacement_seq_hot = torch.nn.functional.one_hot(replacement_seq, num_classes=80)
-
-                seq_out[con_hal] = replacement_seq_hot
-                seq_stack[:] = seq_out[None].repeat(len(seq_stack),1,1)
-                seq_t = seq_out
 
 
-                # place the sidechains from the native motif into the final design
-                ref_sc_crds = indep.xyz2[con_ref]
-                ref_sc_crds = torch.cat((ref_sc_crds, torch.zeros((len(ref_sc_crds), 22, 3))), dim=1)
-                hal_bb_crds = px0_xyz_stack[-1][con_hal,:3,:]
+                # if there was a protein motif, align on the motif to native (BB)
+                # and add native SC conformations 
+                if len(con_ref) > 0:
+                    replacement_seq = indep.seq2[con_ref]
+                    replacement_seq_hot = torch.nn.functional.one_hot(replacement_seq, num_classes=80)
 
-                # get torsions from native motif --> build into refined model
-                converter = rf2aa.util_module.XYZConverter()
-                tors, tors_alt, tors_mask, tors_planar = converter.get_torsions(ref_sc_crds[None], replacement_seq[None])
-                # fix HIS torsions... HACKY. Third tors should be zero
-                
-                is_his = replacement_seq == 8 
+                    seq_out[con_hal] = replacement_seq_hot
+                    seq_stack[:] = seq_out[None].repeat(len(seq_stack),1,1)
+                    seq_t = seq_out
 
-                tors[0,is_his,5,0] = torch.cos(torch.tensor(0.0))
-                tors[0,is_his,5,1] = torch.sin(torch.tensor(0.0))
 
-                hal_allatom_crds = converter.compute_all_atom(replacement_seq[None], hal_bb_crds[None], tors)
-                (RTframes, xyz_full) = hal_allatom_crds
-                denoised_xyz_stack[-1][con_hal] = xyz_full[0,:,:14]
+                    # place the sidechains from the native motif into the final design
+                    ref_sc_crds = indep.xyz2[con_ref]
+                    ref_sc_crds = torch.cat((ref_sc_crds, torch.zeros((len(ref_sc_crds), 22, 3))), dim=1)
+                    hal_bb_crds = px0_xyz_stack[-1][con_hal,:3,:]
 
-                # finally - align this refined model to native on motif bb, add SM, dump
-                motif_xyz_refined = denoised_xyz_stack[-1][con_hal,:3,:] 
-                motif_xyz_native = indep.xyz2[con_ref,:3,:]
-                T_native = motif_xyz_native[:,:3,:].reshape(-1,3).mean(dim=0) # centroid of native motif bb
-                T_refined = motif_xyz_refined[:,:3,:].reshape(-1,3).mean(dim=0) # centroid of refined motif bb
+                    # get torsions from native motif --> build into refined model
+                    converter = rf2aa.util_module.XYZConverter()
+                    tors, tors_alt, tors_mask, tors_planar = converter.get_torsions(ref_sc_crds[None], replacement_seq[None])
+                    # fix HIS torsions... HACKY. Third tors should be zero
+                    
+                    is_his = replacement_seq == 8 
 
-                # get rotation matrix to align native motif to refined motif
-                rms, _, R = th_kabsch(motif_xyz_native[:,:3,:].reshape(-1,3), motif_xyz_refined[:,:3,:].reshape(-1,3))
-                denoised_xyz_stack[-1] = torch.einsum('lai,ij->laj', denoised_xyz_stack[-1]-T_refined, R) + T_native
+                    tors[0,is_his,5,0] = torch.cos(torch.tensor(0.0))
+                    tors[0,is_his,5,1] = torch.sin(torch.tensor(0.0))
 
-                # compute sidechain RMSD when aligned on backbone
-                heavy_sc_con_hal = []
-                heavy_sc_con_ref = []
-                for i,scxyz_hal in enumerate(denoised_xyz_stack[-1][con_hal]):
-                    # seq_i
-                    si = replacement_seq[i]
-                    scxyz_ref = indep.xyz2[con_ref][i]
+                    hal_allatom_crds = converter.compute_all_atom(replacement_seq[None], hal_bb_crds[None], tors)
+                    (RTframes, xyz_full) = hal_allatom_crds
+                    denoised_xyz_stack[-1][con_hal] = xyz_full[0,:,:14]
 
-                    for j,aname in enumerate(rf2aa.chemical.aa2long[si]):
-                        if aname is None: 
-                            break 
-                        heavy_sc_con_hal.append(scxyz_hal[j])
-                        heavy_sc_con_ref.append(scxyz_ref[j])
-                
-                heavy_sc_con_hal = torch.stack(heavy_sc_con_hal)
-                heavy_sc_con_ref = torch.stack(heavy_sc_con_ref)
-                assert not torch.isnan(heavy_sc_con_hal).any()
-                assert not torch.isnan(heavy_sc_con_ref).any()
+                    # finally - align this refined model to native on motif bb, add SM, dump
+                    motif_xyz_refined = denoised_xyz_stack[-1][con_hal,:3,:] 
+                    motif_xyz_native = indep.xyz2[con_ref,:3,:]
+                    T_native = motif_xyz_native[:,:3,:].reshape(-1,3).mean(dim=0) # centroid of native motif bb
+                    T_refined = motif_xyz_refined[:,:3,:].reshape(-1,3).mean(dim=0) # centroid of refined motif bb
 
-                # compute RMSD
-                sc_rmsd = torch.sqrt( ((heavy_sc_con_hal-heavy_sc_con_ref)**2).sum(dim=-1).mean() )
+                    # get rotation matrix to align native motif to refined motif
+                    rms, _, R = th_kabsch(motif_xyz_native[:,:3,:].reshape(-1,3), motif_xyz_refined[:,:3,:].reshape(-1,3))
+                    denoised_xyz_stack[-1] = torch.einsum('lai,ij->laj', denoised_xyz_stack[-1]-T_refined, R) + T_native
 
-                remarks = [ 'REMARK 0 next line is N-CA-C rms',
-                            f'REMARK 0 BACKBONE_RMSD {rms.item():.3f}',
-                            'REMARK 0 Next line is SC heavy RMS with BB included, aligned on BB',
-                            f'REMARK 0 SIDECHAIN_RMSD {sc_rmsd.item():.3f}']
+                    # compute sidechain RMSD when aligned on backbone
+                    heavy_sc_con_hal = []
+                    heavy_sc_con_ref = []
+                    for i,scxyz_hal in enumerate(denoised_xyz_stack[-1][con_hal]):
+                        # seq_i
+                        si = replacement_seq[i]
+                        scxyz_ref = indep.xyz2[con_ref][i]
+
+                        for j,aname in enumerate(rf2aa.chemical.aa2long[si]):
+                            if aname is None: 
+                                break 
+                            heavy_sc_con_hal.append(scxyz_hal[j])
+                            heavy_sc_con_ref.append(scxyz_ref[j])
+                    
+                    heavy_sc_con_hal = torch.stack(heavy_sc_con_hal)
+                    heavy_sc_con_ref = torch.stack(heavy_sc_con_ref)
+                    assert not torch.isnan(heavy_sc_con_hal).any()
+                    assert not torch.isnan(heavy_sc_con_ref).any()
+
+                    # compute RMSD
+                    sc_rmsd = torch.sqrt( ((heavy_sc_con_hal-heavy_sc_con_ref)**2).sum(dim=-1).mean() )
+
+                    remarks = [ 'REMARK 0 next line is N-CA-C rms',
+                                f'REMARK 0 BACKBONE_RMSD {rms.item():.3f}',
+                                'REMARK 0 Next line is SC heavy RMS with BB included, aligned on BB',
+                                f'REMARK 0 SIDECHAIN_RMSD {sc_rmsd.item():.3f}']
+
+                else: # no protein motif, align on the diffusion output (which is xyz2) and then dump w/ 
+                      # SM crds from diffusion
+                    
+                    diff_ca = indep.xyz2[:,1,:]  # (L,3)
+                    ref_ca  = denoised_xyz_stack[-1][:,1,:]
+                    T_diff = diff_ca.mean(dim=0)
+                    T_ref = ref_ca.mean(dim=0)
+
+                    rms, _, R = th_kabsch(diff_ca, ref_ca)
+
+                    denoised_xyz_stack[-1] = torch.einsum('lai,ij->laj', denoised_xyz_stack[-1]-T_ref, R) + T_diff
+
+                    remarks = [ 'REMARK 0 next line is CA RMSD of refined against diffusion output',
+                                f'REMARK 0 CA_RMSD {rms.item():.3f}']
+
+
 
                 # now add SM crds 
-                xyz_sm = indep.metadata['refinement']['xyz_sm']
-                L_sm = len(xyz_sm.squeeze())
-                xyz_sm_compat = torch.zeros((L_sm, 14,3))
-                xyz_sm_compat[:,1,:] = xyz_sm.squeeze()
+                if (indep.metadata['refinement']['ligand'] is not None): 
+                    xyz_sm = indep.metadata['refinement']['xyz_sm']
+                    L_sm = len(xyz_sm[0])
+                    xyz_sm_compat = torch.zeros((L_sm, 14,3))
+                    xyz_sm_compat[:,1,:] = xyz_sm[0]
 
-                msa_sm = indep.metadata['refinement']['msa_sm'].squeeze()
-                # pdb.set_trace()
-                denoised_xyz_stack[-1]  =  torch.cat((denoised_xyz_stack[-1], xyz_sm_compat), dim=0)
-                hot_seq_sm = torch.nn.functional.one_hot(msa_sm, num_classes=80)
-                seq_out = torch.cat((seq_out, hot_seq_sm), dim=0)
-                seq_stack = seq_out[None].repeat(len(seq_stack),1,1)
+                    msa_sm = indep.metadata['refinement']['msa_sm'].squeeze()
+                    # pdb.set_trace()
+                    denoised_xyz_stack[-1]  =  torch.cat((denoised_xyz_stack[-1], xyz_sm_compat), dim=0)
+                    hot_seq_sm = torch.nn.functional.one_hot(msa_sm, num_classes=80)
+                    seq_out = torch.cat((seq_out, hot_seq_sm), dim=0)
+                    seq_stack = seq_out[None].repeat(len(seq_stack),1,1)
 
 
-                Lsm = len(xyz_sm.squeeze())
-                Ltot = len(seq_out.squeeze())
-                Lprot = Ltot - Lsm
-                bond_feats = torch.zeros((Ltot, Ltot))
-                # pdb.set_trace()
-                bond_feats[:Lprot,:Lprot] = rf2aa.util.get_protein_bond_feats(Lprot)
-                bond_sm = indep.metadata['refinement']['bond_feats_sm']
-                bond_feats[Lprot:,Lprot:] = bond_sm
-                indep.bond_feats = bond_feats
-                indep.is_sm = rf2aa.util.is_atom(seq_out.argmax(dim=-1))
+                    Ltot = len(seq_out.squeeze())
+                    Lprot = Ltot - L_sm
+                    bond_feats = torch.zeros((Ltot, Ltot))
+                    # pdb.set_trace()
+                    bond_feats[:Lprot,:Lprot] = rf2aa.util.get_protein_bond_feats(Lprot)
+                    bond_sm = indep.metadata['refinement']['bond_feats_sm']
+                    bond_feats[Lprot:,Lprot:] = bond_sm
+                    indep.bond_feats = bond_feats
+                    indep.is_sm = rf2aa.util.is_atom(seq_out.argmax(dim=-1))
                  
 
                 break # refinement only needs a single step through the loop
@@ -460,6 +488,10 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
     final_seq = indep.seq # dj hack for now
     if sampler.inf_conf.refine: 
         final_seq = seq_stack[0].argmax(dim=-1)
+        lig_name = indep.metadata['refinement']['ligand']
+    else: 
+        lig_name = 'LG1'
+
     final_seq = torch.where((final_seq == 20) | (final_seq==21), 0, final_seq)
 
     # determine lengths of protein and ligand for correct chain labeling in output pdb
@@ -475,7 +507,8 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
                         final_seq, 
                         indep.bond_feats, 
                         chain_Ls=chain_Ls, 
-                        remarks=remarks) 
+                        remarks=remarks,
+                        lig_name=lig_name) 
     
     des_path = os.path.abspath(out)
 

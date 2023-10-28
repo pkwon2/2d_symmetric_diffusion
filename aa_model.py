@@ -362,11 +362,20 @@ class Model:
                 raise Exception(f'Could not find trb file for pdb in same folder: {pdb}')
             
             conf = data['config']
-            src_pdb = conf['inference']['input_pdb']
             ij_visible = conf['inference']['ij_visible']
 
+            had_protein_motif = data['con_hal_idx0'].shape[0] > 0
+
             # xyz_prot, mask_prot, idx_prot, seq_prot
+            if had_protein_motif: 
+                src_pdb = conf['inference']['input_pdb']
+            else: 
+                # no protein motif, xyz2 can be the diffused instead of native pdb 
+                # use later for alignment + ligand placement
+                src_pdb = pdb
+
             src_feats = inference.utils.parse_pdb(src_pdb)
+
             xyz2 = torch.tensor(src_feats['xyz']).to(xyz.device)
             mask2 = torch.tensor(src_feats['mask'])
             idx2 = torch.tensor(src_feats['idx']).to(xyz.device)
@@ -380,6 +389,8 @@ class Model:
             ref_dict['con_ref_idx0'] = data['con_ref_idx0']
             ref_dict['con_hal_idx0'] = data['con_hal_idx0']
             ref_dict['ligand'] = conf['inference']['ligand']
+            ref_dict['src_trb'] = trb
+
             
             # get sm data 
             if ref_dict['ligand'] is not None: 
@@ -405,7 +416,7 @@ class Model:
                 ref_dict['msa_sm'] = msa_sm_refine
                 ref_dict['xyz_sm'] = xyz_sm_refine
                 ref_dict['bond_feats_sm'] = rf2aa.util.get_bond_feats(mol_refine)
-                ref_dict['src_trb'] = trb
+            
 
             metadata['refinement'] = ref_dict
 
@@ -426,7 +437,7 @@ class Model:
             is_sm,
             terminus_type,
             metadata)
-        ic(indep.is_sm.shape)
+
         return indep
 
 
@@ -574,7 +585,10 @@ class Model:
             src_con_ref_idx0 = torch.from_numpy( ref_dict['con_ref_idx0'] )
 
             # replace the sequence w/ sequence from original motif
-            src_motif_seq = indep.seq2[src_con_ref_idx0]
+            if len(src_con_hal_idx0) > 0:
+                src_motif_seq = indep.seq2[src_con_ref_idx0]
+            else:
+                src_motif_seq = None 
         else:
             refine=False
 
@@ -615,7 +629,7 @@ class Model:
 
         #seqt1d = torch.clone(seq)
         seq_cat_shifted = seq_one_hot.argmax(dim=-1)
-        if refine: 
+        if refine and src_motif_seq is not None: 
             seq_cat_shifted[src_con_hal_idx0] = src_motif_seq
         seq_cat_shifted[seq_cat_shifted>=MASKINDEX] -= 1
         t1d = torch.nn.functional.one_hot(seq_cat_shifted, num_classes=NAATOKENS-1)
@@ -786,9 +800,10 @@ class Model:
             xyz_xt_w_motif = xyz.clone()
 
             # DJ - if refine, selection in xyz2 needs to reference the original src pdb for motif
-            sel2 = src_con_ref_idx0 if refine else is_protein_motif
+            sel2 = src_con_ref_idx0 if (refine) else is_protein_motif
 
-            xyz_xt_w_motif[0,is_protein_motif,:NHEAVYPROT] = indep.xyz2[sel2,:NHEAVYPROT]
+            if sum(is_protein_motif) > 0:
+                xyz_xt_w_motif[0,is_protein_motif,:NHEAVYPROT] = indep.xyz2[sel2,:NHEAVYPROT]
 
             # t2d containing desired motif 
             # this construction uses bool mask to allow certain motifs to see others
