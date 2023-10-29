@@ -101,6 +101,26 @@ class SymGen:
         # self.num_subunits = len(self.close_rots) if self.model_only_neibhbors else self.order
         self.res_idx_procesing = fn.partial(
             self._lin_chainbreaks, num_breaks=self.order)
+        
+      # DJ
+    #####################
+    ## pseudo symmetry ##
+    #####################
+
+    def pseudo_chainbreak(self, pdb_idx, break_idx): 
+        """
+        Breaks the chain at desired index 
+        """
+        out_idx = torch.clone(pdb_idx)
+        break_idx_1 = break_idx - 1
+        out_idx[:,break_idx_1:] += 200 # 1-indexed
+
+        La = break_idx_1
+        Lb = out_idx.shape[1] - La
+
+        out_chids = ['A']*La + ['B']*Lb
+
+        return out_idx, out_chids
 
     #####################
     ## Cyclic symmetry ##

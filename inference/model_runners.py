@@ -179,9 +179,13 @@ class Sampler:
         else:
             sys.exit(f'Seq Diffuser of type: {self._conf.seq_diffuser.seqdiff} is not known')
 
-        if self.inf_conf.symmetry is not None:
+
+        if (self.inf_conf.symmetry is not None) or (self.inf_conf.pseudo_symmetry is not None):
+            assert not (self.inf_conf.symmetry and self.inf_conf.pseudo_symmetry), "Cannot use both symmetry and pseudo_symmetry"
+            S_in = self.inf_conf.pseudo_symmetry if self.inf_conf.pseudo_symmetry is not None else self.inf_conf.symmetry
+
             self.symmetry = symmetry.SymGen(
-                self.inf_conf.symmetry,
+                S_in,
                 self.inf_conf.model_only_neighbors,
                 self.inf_conf.recenter,
                 self.inf_conf.radius, 
@@ -610,9 +614,23 @@ class Sampler:
         # symmetrize the inputs 
         self.symmids, self.symmRs, self.symmeta, self.cur_symmsub = None,None,None,None
         if self.symmetry is not None:
+
             assert self._conf.inference.internal_sym is None, 'cannot use both new (inference.internal_sym) and classic (inference.symmetry) symmetry simultaneously'
             # classic version
-            xt, seq_t = self.symmetry.apply_symmetry(indep.xyz, indep.seq)
+            is_sm = indep.is_sm
+
+            xt = torch.clone(indep.xyz)
+            seq_t = torch.clone(indep.seq)
+
+            xyz_to_sym = indep.xyz[~is_sm]
+            seq_to_sym = indep.seq[~is_sm]
+
+            xyz_sym_out, seq_sym_out = self.symmetry.apply_symmetry(xyz_to_sym, seq_to_sym)
+
+            xt[~is_sm] = xyz_sym_out
+            seq_t[~is_sm] = seq_sym_out
+
+            
             
         # propogates the diffused system symmetrically 
         elif self._conf.inference.internal_sym is not None:
@@ -701,7 +719,7 @@ class Sampler:
         # repeat proteins
         elif self._conf.model.symmetrize_repeats:
             Lasu     = self._conf.model.repeat_length 
-            assert indep.xyz.shape[0] % Lasu == 0, 'Lasu must be a factor of the number of tokens but found %d and %d' % (Lasu, indep.xyz.shape[0])
+            assert (indep.xyz.shape[0] - indep.is_sm.sum()) % Lasu == 0, 'Lasu must be a factor of the number of tokens but found %d and %d' % (Lasu, indep.xyz.shape[0])
 
             if indep.xyz.shape[0] == Lasu:
                 # need to duplicate diffused crds + other features 
@@ -1109,7 +1127,7 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat, supplied_full_c
     nrepeat (int): Number of repeat units in repeat protein being modelled 
     """
     assert all([type(x) == tuple for x in ij_is_visible]), 'ij_is_visible must be list of tuples'
-    assert L%nrepeat == 0
+    # assert L%nrepeat == 0
     Lasu = L // nrepeat
 
     # (1) Define matrix where each row/col is a motif chunk, entries are 1 if motif chunks can see each other
@@ -1161,7 +1179,8 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat, supplied_full_c
 
     return mask2d, is_motif
 
-def parse_ij_get_repeat_mask(ij_visible, L, n_repeat, con_hal_idx0, supplied_full_contig):
+
+def parse_ij_get_repeat_mask(ij_visible, L, n_repeat, con_hal_idx0, supplied_full_contig, is_sm):
     """
     Helper function for getting repeat protein mask 2d info
     """
@@ -1175,7 +1194,11 @@ def parse_ij_get_repeat_mask(ij_visible, L, n_repeat, con_hal_idx0, supplied_ful
     ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
     ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
 
-    assert L%n_repeat == 0, 'L must be a multiple of n_repeat'
+    L_prot = L - is_sm.sum()
+    ic(L_prot)
+    ic(n_repeat)
+    assert L_prot%n_repeat == 0, 'L must be a multiple of n_repeat'
+    print(f'WARNING: This code assumes single ligand with a {n_repeat}-repeat protein. Multi ligand likely to be broken.') 
     Lasu = L//n_repeat 
 
     ## check that the user-specified ij_visible is valid
@@ -1184,6 +1207,7 @@ def parse_ij_get_repeat_mask(ij_visible, L, n_repeat, con_hal_idx0, supplied_ful
     contig_motif_breaks = get_breaks(con_hal_idx0, cut=1)
     nbreaks             = len(contig_motif_breaks)
     n_motif_contig      = (nbreaks+1)*n_repeat # total number of motif chunks 
+
     # cannot have more user specified motif chunks than exist in contigs 
     assert max_letter <= n_motif_contig, 'user specified number of motif chunks > number calculated from contigs using {} repeats'.format(n_repeat)
 
@@ -1290,7 +1314,9 @@ class NRBStyleSelfCond(Sampler):
                 is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig  # should be appropriate length 
 
 
-                if is_protein_motif.sum() == len(con_hal_idx0):
+                is_motif = is_protein_motif.clone() | indep.is_sm # Assumes any small molecule is a motif chunk
+
+                if is_motif.sum() == len(con_hal_idx0):
                     supplied_full_contig = True
                     print('Detected full contig supplied--------------')
                 else: 
@@ -1298,13 +1324,14 @@ class NRBStyleSelfCond(Sampler):
                     supplied_full_contig = False
 
 
+
                 ### t2d_is_revealed ###
                 n_repeat = self._conf.inference.n_repeats
                 L = len(is_protein_motif)
-                mask_t2d = parse_ij_get_repeat_mask(self._conf.inference.ij_visible, L, n_repeat, con_hal_idx0, supplied_full_contig)
+                mask_t2d = parse_ij_get_repeat_mask(self._conf.inference.ij_visible, L, n_repeat, con_hal_idx0, supplied_full_contig, indep.is_sm)
 
 
-                is_motif = is_protein_motif.clone() | indep.is_sm # Assumes any small molecule is a motif chunk
+                
 
         else: 
             raise Exception('3D motif not implemented yet')
@@ -1357,6 +1384,35 @@ class NRBStyleSelfCond(Sampler):
         else:
             is_protein_motif, t2d_is_revealed = None,None 
 
+        ### symmetrize before passing through model
+        if self.symmetry is not None:
+            # x_t_1, seq_t_1 = self.symmetry.apply_symmetry(x_t_1, seq_t_1)
+            is_sm = indep.is_sm
+
+            # x_t_1, seq_t_1 = torch.clone(x_t_1), torch.clone(seq_t_1)
+
+
+            xyz_to_sym = indep.xyz[~is_sm]
+            seq_to_sym = indep.seq[~is_sm]
+
+            xyz_sym_out, seq_sym_out = self.symmetry.apply_symmetry(xyz_to_sym, seq_to_sym)
+
+            # put back into indep
+            indep.xyz[~is_sm] = xyz_sym_out
+            indep.seq[~is_sm] = seq_sym_out
+
+        
+        if (self.symmetry is not None) and (not self.inf_conf.pseudo_symmetry):
+            idx_pdb = rfi.idx
+            idx_pdb, self.chain_idx = self.symmetry.res_idx_procesing(res_idx=idx_pdb)
+
+        elif (self.symmetry is not None) and (self.inf_conf.pseudo_symmetry):
+            # no chainbreaks etc because pseudocycle 
+            if self.inf_conf.pseudocycle_break is not None: 
+                bidx = self.inf_conf.pseudocycle_break # 1-indexed
+                idx_pdb, self.chain_idx = self.symmetry.pseudo_chainbreak(idx_pdb, bidx)
+
+
         if not self.inf_conf.subsymm_t1d_perfect: 
             # all AA that are diffused (according to contigs) have intermediate confidences
             # even if they are templated in T2D 
@@ -1392,6 +1448,7 @@ class NRBStyleSelfCond(Sampler):
         ##################################
         self_cond = False
         cond_A = ((t < self.diffuser.T) and (t != self.diffuser_conf.partial_T)) and self._conf.inference.str_self_cond
+        ic(self._conf.inference.str_self_cond)
         cond_B = not self.inf_conf.refine  # cannot self cond with refinement model
         if cond_A and cond_B:
             # in the middle of the traj, so self condition on previous px0
@@ -1497,9 +1554,9 @@ class NRBStyleSelfCond(Sampler):
                 rfi.t2d[mask_2d_final] = t2d_subsymm[:,None,...].expand_as(rfi.t2d)[mask_2d_final]
 
         
-        if self.symmetry is not None:
-            idx_pdb = rfi.idx
-            idx_pdb, self.chain_idx = self.symmetry.res_idx_procesing(res_idx=idx_pdb)
+        
+            
+
 
         # Model Forward
         with torch.no_grad():
@@ -1704,7 +1761,19 @@ class NRBStyleSelfCond(Sampler):
         seq_t_1 = seq_t_1.cpu()
 
         if self.symmetry is not None:
-            x_t_1, seq_t_1 = self.symmetry.apply_symmetry(x_t_1, seq_t_1)
+            # x_t_1, seq_t_1 = self.symmetry.apply_symmetry(x_t_1, seq_t_1)
+            is_sm = indep.is_sm
+
+            # x_t_1, seq_t_1 = torch.clone(x_t_1), torch.clone(seq_t_1)
+
+
+            xyz_to_sym = x_t_1[~is_sm]
+            seq_to_sym = seq_t_1[~is_sm]
+
+            xyz_sym_out, seq_sym_out = self.symmetry.apply_symmetry(xyz_to_sym, seq_to_sym)
+
+            x_t_1[~is_sm] = xyz_sym_out
+            seq_t_1[~is_sm] = seq_sym_out
         
         if REPORT_MEM:
             print('MEM REPORT END OF MODEL_RUNNERS.SAMPLE_STEP')

@@ -61,6 +61,8 @@ inference:
   refine_recycles: -1
   refine: False
   align_px0_motif: True
+  pseudo_symmetry: null
+  pseudocycle_break: null
 
 
 contigmap:
@@ -124,7 +126,8 @@ model:
   symm_fit_start: -1
   clash: 4.0
   lock_symmsubs_at: -1
-  allow_particle_recenter: false 
+  allow_particle_recenter: False 
+  pseudo_cycle: False 
 
 diffuser:
   T: 200
