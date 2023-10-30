@@ -895,13 +895,13 @@ class Sampler:
 
         # ### alpha_t ###
         # ###############
-        # seq_tmp = t1d[...,:-1].argmax(dim=-1).reshape(-1,L)
-        # alpha, _, alpha_mask, _ = util.get_torsions(xyz_t.reshape(-1,L,27,3), seq_tmp, TOR_INDICES, TOR_CAN_FLIP, REF_ANGLES)
-        # alpha_mask = torch.logical_and(alpha_mask, ~torch.isnan(alpha[...,0]))
-        # alpha[torch.isnan(alpha)] = 0.0
-        # alpha = alpha.reshape(1,-1,L,10,2)
-        # alpha_mask = alpha_mask.reshape(1,-1,L,10,1)
-        # alpha_t = torch.cat((alpha, alpha_mask), dim=-1).reshape(1, -1, L, 30)
+        seq_tmp = t1d[...,:-1].argmax(dim=-1).reshape(-1,L)
+        alpha, _, alpha_mask, _ = util.get_torsions(xyz_t.reshape(-1,L,27,3), seq_tmp, TOR_INDICES, TOR_CAN_FLIP, REF_ANGLES)
+        alpha_mask = torch.logical_and(alpha_mask, ~torch.isnan(alpha[...,0]))
+        alpha[torch.isnan(alpha)] = 0.0
+        alpha = alpha.reshape(1,-1,L,10,2)
+        alpha_mask = alpha_mask.reshape(1,-1,L,10,1)
+        alpha_t = torch.cat((alpha, alpha_mask), dim=-1).reshape(1, -1, L, 30)
 
 
         # get torsion angles from templates
@@ -1376,8 +1376,6 @@ class NRBStyleSelfCond(Sampler):
                 first_px0_needs_save = True # save first one 
             else: 
                 px0_needs_align = True
-        
-
 
         if (twotemplate and threetemplate):
             is_protein_motif, t2d_is_revealed = self._get_3template_masks(indep)
@@ -1400,15 +1398,18 @@ class NRBStyleSelfCond(Sampler):
             # put back into indep
             indep.xyz[~is_sm] = xyz_sym_out
             indep.seq[~is_sm] = seq_sym_out
-
         
+        # msa_masked, msa_full, seq_in, xt_in, idx_pdb, t1d, t2d, xyz_t, alpha_t = self._preprocess(
+        #         seq_t, x_t, t) ### init idx_pdb
+        #idx_pdb = 0 # dummy value
+        idx_pdb = torch.tensor(self.contig_map.rf)[None]
         if (self.symmetry is not None) and (not self.inf_conf.pseudo_symmetry):
             idx_pdb = rfi.idx
             idx_pdb, self.chain_idx = self.symmetry.res_idx_procesing(res_idx=idx_pdb)
 
         elif (self.symmetry is not None) and (self.inf_conf.pseudo_symmetry):
             # no chainbreaks etc because pseudocycle 
-            if self.inf_conf.pseudocycle_break is not None: 
+            if self.inf_conf.pseudocycle_break is not None:
                 bidx = self.inf_conf.pseudocycle_break # 1-indexed
                 idx_pdb, self.chain_idx = self.symmetry.pseudo_chainbreak(idx_pdb, bidx)
 
