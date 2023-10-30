@@ -1403,6 +1403,9 @@ class NRBStyleSelfCond(Sampler):
         #         seq_t, x_t, t) ### init idx_pdb
         #idx_pdb = 0 # dummy value
         idx_pdb = torch.tensor(self.contig_map.rf)[None]
+        print('LENGTH OF CONTIG_MAP.RF:', len(self.contig_map.rf))
+        #print(len(self.contig_map.rf))
+
         if (self.symmetry is not None) and (not self.inf_conf.pseudo_symmetry):
             idx_pdb = rfi.idx
             idx_pdb, self.chain_idx = self.symmetry.res_idx_procesing(res_idx=idx_pdb)
@@ -1410,9 +1413,11 @@ class NRBStyleSelfCond(Sampler):
         elif (self.symmetry is not None) and (self.inf_conf.pseudo_symmetry):
             # no chainbreaks etc because pseudocycle 
             if self.inf_conf.pseudocycle_break is not None:
-                bidx = self.inf_conf.pseudocycle_break # 1-indexed
+                bidx = self.inf_conf.pseudocycle_break # 1-indexed, res_no at chain break
                 idx_pdb, self.chain_idx = self.symmetry.pseudo_chainbreak(idx_pdb, bidx)
-
+        # print('LENGTH OF IDX_PDB:', len(idx_pdb))
+        print('idx_pdb, bidx:' , idx_pdb, bidx)
+        print('self.chain_idx:', self.chain_idx)
 
         if not self.inf_conf.subsymm_t1d_perfect: 
             # all AA that are diffused (according to contigs) have intermediate confidences
