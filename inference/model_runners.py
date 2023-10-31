@@ -1402,8 +1402,17 @@ class NRBStyleSelfCond(Sampler):
                     # put back into indep
                     indep.xyz[~is_sm] = xyz_sym_out
                     indep.seq[~is_sm] = seq_sym_out
+                else:
+                    print('breaking symmetry activated')
             else:
-                print('breaking symmetry activated')
+                xyz_to_sym = indep.xyz[~is_sm]
+                seq_to_sym = indep.seq[~is_sm]
+
+                xyz_sym_out, seq_sym_out = self.symmetry.apply_symmetry(xyz_to_sym, seq_to_sym)
+
+                # put back into indep
+                indep.xyz[~is_sm] = xyz_sym_out
+                indep.seq[~is_sm] = seq_sym_out
         # msa_masked, msa_full, seq_in, xt_in, idx_pdb, t1d, t2d, xyz_t, alpha_t = self._preprocess(
         #         seq_t, x_t, t) ### init idx_pdb
         #idx_pdb = 0 # dummy value
