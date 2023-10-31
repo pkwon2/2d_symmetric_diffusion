@@ -63,6 +63,7 @@ inference:
   align_px0_motif: True
   pseudo_symmetry: null
   pseudocycle_break: null
+  T_break_sym: null
 
 
 contigmap:

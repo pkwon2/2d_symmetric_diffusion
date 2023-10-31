@@ -1388,17 +1388,18 @@ class NRBStyleSelfCond(Sampler):
             is_sm = indep.is_sm
 
             # x_t_1, seq_t_1 = torch.clone(x_t_1), torch.clone(seq_t_1)
+            #self.inf_conf.T_break_sym
+            if t > self.inf_conf.T_break_sym: ### If step T >= T_symm, do symmetrization, otherwise stop
+                xyz_to_sym = indep.xyz[~is_sm]
+                seq_to_sym = indep.seq[~is_sm]
 
+                xyz_sym_out, seq_sym_out = self.symmetry.apply_symmetry(xyz_to_sym, seq_to_sym)
 
-            xyz_to_sym = indep.xyz[~is_sm]
-            seq_to_sym = indep.seq[~is_sm]
-
-            xyz_sym_out, seq_sym_out = self.symmetry.apply_symmetry(xyz_to_sym, seq_to_sym)
-
-            # put back into indep
-            indep.xyz[~is_sm] = xyz_sym_out
-            indep.seq[~is_sm] = seq_sym_out
-        
+                # put back into indep
+                indep.xyz[~is_sm] = xyz_sym_out
+                indep.seq[~is_sm] = seq_sym_out
+            else:
+                print('breaking symmetry activated')
         # msa_masked, msa_full, seq_in, xt_in, idx_pdb, t1d, t2d, xyz_t, alpha_t = self._preprocess(
         #         seq_t, x_t, t) ### init idx_pdb
         #idx_pdb = 0 # dummy value
@@ -1416,9 +1417,9 @@ class NRBStyleSelfCond(Sampler):
                 bidx = self.inf_conf.pseudocycle_break # 1-indexed, res_no at chain break
                 idx_pdb, self.chain_idx = self.symmetry.pseudo_chainbreak(idx_pdb, bidx)
         # print('LENGTH OF IDX_PDB:', len(idx_pdb))
-        print('idx_pdb, bidx:' , idx_pdb, bidx)
-        print('self.chain_idx:', self.chain_idx)
-
+                print('idx_pdb, bidx:' , idx_pdb, bidx)
+                print('self.chain_idx:', self.chain_idx)
+                print('t:', t)
         if not self.inf_conf.subsymm_t1d_perfect: 
             # all AA that are diffused (according to contigs) have intermediate confidences
             # even if they are templated in T2D 
