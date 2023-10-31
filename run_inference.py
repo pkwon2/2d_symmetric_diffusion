@@ -185,7 +185,7 @@ def sample(sampler):
         log.info(f'Finished design in {(time.time()-start_time)/60:.2f} minutes')
         save_outputs(sampler, out_prefix, *sampler_out)
 
-        # # hacky - if refine, set conf ligand here so that atoms are renamed
+        # # hacky - if refine, set conf ligand here so tfhat atoms are renamed
         # if sampler.inf_conf.refine:
         #     if sampler_out[0].metadata['refinement']['ligand'] is not None:
         #         sampler._conf.inference.ligand = sampler_out[0].metadata['refinement']['ligand']
@@ -498,7 +498,14 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
     # sm_mask = rf2aa.util.is_atom(final_seq)
     sm_mask = indep.is_sm
     chain_Ls = [len(sm_mask)-sm_mask.sum(), sm_mask.sum()] # assumes 1 protein followed by 1 ligand
-    
+    if sampler.inf_conf.pseudocycle_break is not None:
+        chain_A = len(sm_mask)-sm_mask.sum() - sampler.inf_conf.pseudocycle_break
+        chain_B = len(sm_mask)-sm_mask.sum() - chain_A
+        chain_Ls = [chain_A, chain_B, sm_mask.sum()] # save for dimer chainbreak for now
+
+    print('CHAIN_LS:', chain_Ls)
+        
+        
     # pX0 last step
     out = f'{out_prefix}.pdb'
     # pdb.set_trace()

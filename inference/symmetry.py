@@ -106,7 +106,7 @@ class SymGen:
     #####################
     ## pseudo symmetry ##
     #####################
-
+    ### change to dimer A + C
     def pseudo_chainbreak(self, pdb_idx, break_idx): 
         """
         Breaks the chain at desired index 
