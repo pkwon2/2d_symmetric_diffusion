@@ -267,10 +267,13 @@ class Model:
                 return RFO(*model(**input))
 
 
-    def make_indep(self, pdb, parse_hetatm, refine=False):
+    def make_indep(self, pdb, parse_hetatm, refine=False, refine_w_ligand=False):
         # self.target_feats = iu.process_target(self.inf_conf.input_pdb, parse_hetatom=True, center=False)
         # init_protein_tmpl=False, init_ligand_tmpl=False, init_protein_xyz=False, init_ligand_xyz=False,
         #     parse_hetatm=False, n_cycle=10, random_noise=5.0)
+
+        parse_hetatm = parse_hetatm or refine_w_ligand 
+
         chirals = torch.Tensor()
         atom_frames = torch.zeros((0,3,2))
 
@@ -403,25 +406,24 @@ class Model:
                     raise Exception(f'ligand {ligand} not found in pdb: {pdb}')
 
                 mol_refine, msa_sm_refine, ins_sm_refine, xyz_sm_refine, _ = parsers.parse_mol("".join(stream), filetype="pdb", string=True)
-                # a3m_sm_refine = {"msa": msa_sm_refine.unsqueeze(0), "ins": ins_sm_refine.unsqueeze(0)}
-                # G_refine = rf2aa.util.get_nxgraph(mol)
-                
-                # index 0 - offset from current residue/atom. 0 is the current residue/atom
-                # index 1 - which atom in the residue (0 indexed)
-                # atom_frames_refine = rf2aa.util.get_atom_frames(msa_sm, G)
-                # N_symmetry_refine, sm_L_refine, _ = xyz_sm.shape
-                # a3m = merge_a3m_hetero(a3m_prot, a3m_sm, Ls)
 
 
                 ref_dict['msa_sm'] = msa_sm_refine
                 ref_dict['xyz_sm'] = xyz_sm_refine
                 ref_dict['bond_feats_sm'] = rf2aa.util.get_bond_feats(mol_refine)
-            
+
+                # add sm seq/crds to xyz2/seq2 if refine_w_ligand
+                if refine_w_ligand:
+                    L_sm = len(xyz_sm_refine[0])
+                    xyz_sm_compat = torch.zeros((L_sm, 14,3))
+                    xyz_sm_compat[:,1,:] = xyz_sm[0]
+
+                    xyz2 = torch.cat((xyz2, xyz_sm_compat), dim=0)
+                    seq2 = torch.cat((seq2, msa_sm_refine), dim=0)
+
 
             metadata['refinement'] = ref_dict
 
-
-            tmp = xyz2[ref_dict['con_ref_idx0']]
 
         indep = Indep(
             seq,
@@ -470,7 +472,7 @@ class Model:
         max_hal_idx = max(i for _, i  in contig_map.hal)
 
         # NOTE - this makes all small molecules in the same chain
-        print(f'WARNING: all small molecules in the same chain. Chain: {next_unused_chain}')
+        print(f'WARNING: putting all small molecules in the same chain. Chain: {next_unused_chain}')
         contig_map.hal.extend(zip([next_unused_chain]*n_sm, range(max_hal_idx+200,max_hal_idx+200+n_sm)))
 
         chain_id = np.array([c for c, _ in contig_map.hal])
@@ -800,8 +802,7 @@ class Model:
             xyz_xt_w_motif = xyz.clone()
 
             # DJ - if refine, selection in xyz2 needs to reference the original src pdb for motif
-            sel2 = src_con_ref_idx0 if (refine) else is_protein_motif
-
+            sel2 = src_con_ref_idx0 if (refine and not indep.is_sm.any()) else is_protein_motif
             if sum(is_protein_motif) > 0:
                 xyz_xt_w_motif[0,is_protein_motif,:NHEAVYPROT] = indep.xyz2[sel2,:NHEAVYPROT]
 

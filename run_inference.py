@@ -290,7 +290,7 @@ def sample_one(sampler, simple_logging=False):
             elif sampler._conf.preprocess.randomize_frames:
                 print('WARNING: replacing all frames with RANDOM regardless of motif/nonmotif')
                 indep.xyz = aa_model.randomly_rotate_frames(indep.xyz)
-                
+            
             px0, x_t, seq_t, tors_t, plddt, rfo = sampler.sample_step(t, indep, rfo)
 
             # assert_that(indep.xyz.shape).is_equal_to(x_t.shape)
@@ -395,10 +395,12 @@ def sample_one(sampler, simple_logging=False):
                     
                     diff_ca = indep.xyz2[:,1,:]  # (L,3)
                     ref_ca  = denoised_xyz_stack[-1][:,1,:]
-                    T_diff = diff_ca.mean(dim=0)
-                    T_ref = ref_ca.mean(dim=0)
+                    
+                    T_diff = diff_ca[~indep.is_sm].mean(dim=0)
+                    T_ref = ref_ca[~indep.is_sm].mean(dim=0)
 
-                    rms, _, R = th_kabsch(diff_ca, ref_ca)
+                    
+                    rms, _, R = th_kabsch(diff_ca[~indep.is_sm], ref_ca[~indep.is_sm])
 
                     denoised_xyz_stack[-1] = torch.einsum('lai,ij->laj', denoised_xyz_stack[-1]-T_ref, R) + T_diff
 
@@ -408,7 +410,7 @@ def sample_one(sampler, simple_logging=False):
 
 
                 # now add SM crds 
-                if (indep.metadata['refinement']['ligand'] is not None): 
+                if (indep.metadata['refinement']['ligand'] is not None) and (not sampler._conf.inference.refine_w_ligand): 
                     xyz_sm = indep.metadata['refinement']['xyz_sm']
                     L_sm = len(xyz_sm[0])
                     xyz_sm_compat = torch.zeros((L_sm, 14,3))
@@ -431,9 +433,16 @@ def sample_one(sampler, simple_logging=False):
                     bond_feats[Lprot:,Lprot:] = bond_sm
                     indep.bond_feats = bond_feats
                     indep.is_sm = rf2aa.util.is_atom(seq_out.argmax(dim=-1))
-                 
+                
+                elif sampler._conf.inference.refine_w_ligand:
+                    # add ligand seq into seq_stack 
+                    seq_out = torch.zeros_like(seq_t).long() # (L,80)
+                    lig_seq = indep.seq[indep.is_sm] 
+                    lig_seq_hot = torch.nn.functional.one_hot(lig_seq, num_classes=80)
 
-                break # refinement only needs a single step through the loop
+                    seq_out[indep.is_sm] = lig_seq_hot
+                    seq_stack[:] = seq_out[None].repeat(len(seq_stack),1,1)
+                break
 
         # if doing new symmetry, dump full complex:
         if sampler._conf.inference.internal_sym:

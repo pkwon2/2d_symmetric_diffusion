@@ -442,7 +442,8 @@ class Sampler:
 
         indep = self.model_adaptor.make_indep(self._conf.inference.input_pdb, 
                                               self._conf.inference.ligand,
-                                              self._conf.inference.refine)
+                                              self._conf.inference.refine,
+                                              self._conf.inference.refine_w_ligand)
 
 
         # check for subsymm template and add to indep if present
@@ -1238,7 +1239,7 @@ class NRBStyleSelfCond(Sampler):
 
 
         # Assume that SM input will always be motif!! 
-        if indep.is_sm.any() and not refine:
+        if indep.is_sm.any():
             print('Detected small molecule in input - assuming it is a motif chunk.')
             # where is sm in hal? 
             where_is_sm = torch.where(indep.is_sm)[0]
@@ -1257,6 +1258,9 @@ class NRBStyleSelfCond(Sampler):
             if len(src_con_hal_idx0) > 0:
                 is_protein_motif[src_con_hal_idx0] = True 
                 con_hal_idx0 = src_con_hal_idx0
+            elif self._conf.inference.refine_w_ligand: 
+                # had ligand but no protein motif, don't exit with empty masks 
+                src_con_hal_idx0 = con_hal_idx0 # con_hal_idx0 should have been set above w/ ligand indices
             else:
                 L = len(is_protein_motif)
                 mask_t2d = torch.zeros((L,L))
@@ -1295,11 +1299,16 @@ class NRBStyleSelfCond(Sampler):
                 # User can use ij_visible argument
                 ij_visible = self._conf.inference.ij_visible
                 if refine: 
-                    ij_visible = ref_dict['ij_visible']
-                    # if we had ligand, remove last character from ij_visible 
-                    if ref_dict['ligand']: 
-                        print('WARNING: Popping detected ligand chunk from reference ij_visible')
-                        ij_visible = ij_visible[:-1]
+
+                    if not self._conf.inference.refine_w_ligand:
+                        ij_visible = ref_dict['ij_visible']
+                        # if we had ligand, remove last character from ij_visible 
+                        if ref_dict['ligand']: 
+                            print('WARNING: Popping detected ligand chunk from reference ij_visible')
+                            ij_visible = ij_visible[:-1]
+                    
+                    else:
+                        ij_visible = 'a'
 
                 assert ij_visible is not None, '3 template + motif_only_2d requires description of motif pairwise visibility'
                 ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
