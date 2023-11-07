@@ -7,7 +7,9 @@ def make_refine_jobs(outdir,
                      run_script,
                      n_refine=2,
                      n_per_job=100,
-                     ckpt_refine='/home/davidcj/projects/train_2template/rf_diffusion/good_training_sessions/train_session2023-09-22_1695413763.3657782/models/BFF_4.pt'):
+                     ckpt_refine='/home/davidcj/projects/train_2template/rf_diffusion/good_training_sessions/train_session2023-09-22_1695413763.3657782/models/BFF_4.pt',
+                     ligand=None,
+                     refine_w_ligand=False):
     """
     Creates refinement jobs for a folder of outputs
     """
@@ -24,7 +26,13 @@ def make_refine_jobs(outdir,
                                 'supply_motif_seq':True,
                                 'refine_recycles':4,
                                 'refine':True,
-                                'refine_w_ligand':True}
+                                'refine_w_ligand':refine_w_ligand}
+
+    if ligand:
+        assert refine_w_ligand, 'detected refine_w_ligand False but also detected supplied ligand is not None'
+        BASE_INF_DICT['ligand'] = ligand
+    if refine_w_ligand:
+        assert ligand is not None, 'detected refine_w_ligand True but did not recieve specific ligand.'
 
     BASE_DIFF_DICT = {'T':50,
                     'so3_type':'random',
@@ -94,6 +102,12 @@ def main():
     parser.add_argument('--n_per_job', '-p', type=int, default=100,
                         help='Number of refinement runs per gpu job') 
 
+    parser.add_argument('--ligand', '-l', type=str, default=None,
+                        help='ligand in the pdbs being refinend')
+
+    parser.add_argument('--refine_w_ligand', '-ref_w_lig', action='store_true', default=False,
+                        help='If True, refine with ligand present. Make sure you use a model that was trained to refine in the presence of ligands')
+
     args = parser.parse_args()
 
     args.outdir = os.path.abspath(args.outdir)
@@ -102,7 +116,9 @@ def main():
                      args.run_script, 
                      args.n_refine, 
                      args.n_per_job, 
-                     args.ckpt_refine)
+                     args.ckpt_refine,
+                     args.ligand,
+                     args.refine_w_ligand)
 
 
 if __name__ == '__main__':
