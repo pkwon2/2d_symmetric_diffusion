@@ -362,7 +362,7 @@ class Model:
                 trb = pdb.replace('.pdb', '.trb')
                 data = np.load(trb, allow_pickle=True)
             except: 
-                raise Exception(f'Could not find trb file for pdb in same folder: {pdb}')
+                raise Exception(f'Could not find trb file for pdb in same folder: {pdb}') ###TODO add flag to indicate trb file path
             
             conf = data['config']
             ij_visible = conf['inference']['ij_visible']
@@ -451,7 +451,7 @@ class Model:
 
         # Insert small mol into contig_map
         all_chains = set(ch for ch,_ in contig_map.hal)
-
+        #print(all_chains)
         # Not yet implemented due to index shifting
         # assert_that(len(all_chains)).is_equal_to(1)
         print(f'WARNING: only 1 chain supported for now. Found {len(all_chains)} chains: {all_chains}')

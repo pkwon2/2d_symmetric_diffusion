@@ -106,20 +106,31 @@ class SymGen:
     #####################
     ## pseudo symmetry ##
     #####################
-    ### change to dimer A + C
+    ### change to dimer A + B, works for dimmer only?
     def pseudo_chainbreak(self, pdb_idx, break_idx): 
         """
         Breaks the chain at desired index 
         """
         out_idx = torch.clone(pdb_idx)
-        break_idx_1 = break_idx - 1
-        out_idx[:,break_idx_1:] += 200 # 1-indexed
+        prev_break_idx = 0
+        Ls = []
+        for curr_break_idx in (str(break_idx).split("-")):
+            curr_break_idx = int(curr_break_idx)
+            #curr_break_idx = curr_break_idx - 1
+            out_idx[:,curr_break_idx:] += 200 # 1-indexed
+            Ls.append(curr_break_idx - prev_break_idx)
+            prev_break_idx = curr_break_idx
+        Ls.append(out_idx.shape[1] - prev_break_idx)
+        # break_idx_1 = break_idx - 1
+        # out_idx[:,break_idx_1:] += 200 # 1-indexed
 
-        La = break_idx_1
-        Lb = out_idx.shape[1] - La
+        # La = break_idx_1
+        # Lb = out_idx.shape[1] - La
 
-        out_chids = ['A']*La + ['B']*Lb
-
+        # out_chids = ['A']*La + ['B']*Lb
+        out_chids = []
+        for i, L in enumerate(Ls):
+            out_chids += [string.ascii_uppercase[i]]*L
         return out_idx, out_chids
 
     #####################

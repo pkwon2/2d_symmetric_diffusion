@@ -1,1 +1,5 @@
-./left_handed_alpha.py
+left_handed_alpha.py
+*.log
+*.pyc
+*.swp
+*.pkl

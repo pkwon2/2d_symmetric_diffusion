@@ -507,11 +507,21 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
     # sm_mask = rf2aa.util.is_atom(final_seq)
     sm_mask = indep.is_sm
     chain_Ls = [len(sm_mask)-sm_mask.sum(), sm_mask.sum()] # assumes 1 protein followed by 1 ligand
+    CHAINS = []
+    prev_pseudocycle_break = 0
     if sampler.inf_conf.pseudocycle_break is not None:
-        chain_A = len(sm_mask)-sm_mask.sum() - sampler.inf_conf.pseudocycle_break
-        chain_B = len(sm_mask)-sm_mask.sum() - chain_A
-        chain_Ls = [chain_A, chain_B, sm_mask.sum()] # save for dimer chainbreak for now
-
+        for curr_pseudocycle_break in str(sampler.inf_conf.pseudocycle_break).split("-"):
+            curr_pseudocycle_break = int(curr_pseudocycle_break)
+            CHAINS.append(torch.tensor(curr_pseudocycle_break - prev_pseudocycle_break))
+            prev_pseudocycle_break = curr_pseudocycle_break
+        # chain_A = len(sm_mask)-sm_mask.sum() - sampler.inf_conf.pseudocycle_break
+        # chain_B = len(sm_mask)-sm_mask.sum() - chain_A
+        # chain_Ls = [chain_A, chain_B, sm_mask.sum()] # save for dimer chainbreak for now
+        prev_chains_length = sum(CHAINS)
+        CHAINS.append(len(sm_mask)-sm_mask.sum() - prev_chains_length)
+        CHAINS.append(sm_mask.sum())
+        #chain_Ls = [CHAINS, sm_mask.sum()]
+        chain_Ls = CHAINS
     print('CHAIN_LS:', chain_Ls)
         
         
