@@ -3,3 +3,5 @@ left_handed_alpha.py
 *.pyc
 *.swp
 *.pkl
+__pycache__/
+
