@@ -590,10 +590,10 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
         with open(f'{out_prefix}.trb','wb') as f_out:
             pickle.dump(trb, f_out)
 
-    else: 
-        # symlink to the original diffusion trb file if refining
-        orig_trb = indep.metadata['refinement']['src_trb']
-        os.symlink(orig_trb, f'{out_prefix}.trb')
+    # else: # user can refer to the origional diffusion trb, symlink cause error during testing
+    #     # symlink to the original diffusion trb file if refining
+    #     orig_trb = indep.metadata['refinement']['src_trb']
+    #     os.symlink(orig_trb, f'{out_prefix}.trb')
 
     log.info(f'design : {des_path}')
     if not sampler.inf_conf.refine:

@@ -2,6 +2,7 @@ import os
 import sys
 import dataclasses
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'RF2-allatom'))
+import rf2aa
 from rf2aa.RoseTTAFoldModel import RoseTTAFoldModule as RoseTTAFoldModuleReal
 from rf2aa.RoseTTAFoldModel import RoseTTAFoldModule
 import torch

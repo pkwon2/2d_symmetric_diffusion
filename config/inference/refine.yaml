@@ -1,0 +1,20 @@
+defaults:
+  - debug
+inference:
+  input_pdb: benchmark/input/LA_pseudocycle.pdb
+  num_designs: 2
+  output_prefix: debug/refined
+  model_runner: NRBStyleSelfCond
+  ij_visible: null
+  motif_only_2d: True
+  refine_recycles: 4
+  refine: True
+  refine_w_ligand: False
+  ckpt_path: /mnt/projects/ml/aa_template/checkpoints/refine/train_session2023-11-04_1699130567.230787/BFF_3.pt
+  two_template: True
+  three_template: True
+diffuser:
+  so3_type: random
+  eucl_type: gaussian
+
+

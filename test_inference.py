@@ -317,7 +317,7 @@ class TestInference(unittest.TestCase):
         is_motif_ref = torch.tensor(trb['con_ref_idx0'])
         n_motif = len(is_motif)
         cmp = partial(tensor_util.cmp, atol=1e-9, rtol=1e-4)
-        ipdb.set_trace()
+        #ipdb.set_trace()
         diff_len  = len(output_feats['seq'])
         test_utils.assertEqual(self,cmp, diff_len, L) #not sure what else to test here, seq is all A's
 
@@ -349,7 +349,7 @@ class TestInference(unittest.TestCase):
         is_motif_ref = torch.tensor(trb['con_ref_idx0'])
         n_motif = len(is_motif)
         cmp = partial(tensor_util.cmp, atol=1e-9, rtol=1e-4)
-        ipdb.set_trace()
+        #ipdb.set_trace()
         diff_len  = len(output_feats['seq'])
         test_utils.assertEqual(self,cmp, diff_len, L)
         test_utils.assertEqual(self,cmp, output_feats['seq'][is_motif], input_feats['seq'][is_motif_ref])
@@ -536,13 +536,58 @@ class TestInference(unittest.TestCase):
         n_motif = len(is_motif)
         #ipdb.set_trace()
         cmp = partial(tensor_util.cmp, atol=5e-2, rtol=0)
-        ipdb.set_trace()
+        #ipdb.set_trace()
         test_utils.assert_matches_golden(self, 'deterministic_diffusion', output_feats, rewrite=True, custom_comparator=cmp)
 
 
-## refinement movement of backbone + ligand
-## deterministic test result in consistent pdb output
 
+    def test_refinement_with_ligand(self): #refinement take all ligands info from trb file
+        run_inference.make_deterministic()
+        T = 50 #does not matter for refinement
+        
+        output_pdb, conf = infer([
+            f'diffuser.T={T}',
+            'inference.ckpt_path=/projects/ml/aa_template/checkpoints/refine/train_session2023-11-04_1699130567.230787/BFF_3.pt',
+            'inference.num_designs=1',
+            'inference.input_pdb=/home/lhtran/software/rf_diffusion_pseudocycle/rf_diffusion/benchmark/input/LA_pseudocycle.pdb',
+            'inference.two_template=True',
+            'inference.three_template=True',
+            'inference.motif_only_2d=True',
+            'model.main_block=1',
+            'inference.align_px0_motif=False',
+            "preprocess.eye_frames=True",
+            "inference.ij_visible=a",
+            'inference.supply_motif_seq=True',
+            'diffuser.so3_type=random',
+            'diffuser.eucl_type=gaussian',
+            'inference.refine_recycles=4',
+            'inference.refine=True',
+            'inference.refine_w_ligand=True',
+            'inference.ligand=DIG',
+            'inference.pseudocycle_break=210' #break at 210th residue to preserve ligand heteatm naming
+        ])
+
+        input_feats = inference.utils.parse_pdb(conf.inference.input_pdb,parse_hetatom=True)
+        output_feats = inference.utils.parse_pdb(output_pdb,parse_hetatom=True)
+
+        #trb = get_trb(conf)
+        # is_motif = torch.tensor(trb['con_hal_idx0'])
+        # is_motif_ref = torch.tensor(trb['con_ref_idx0'])
+        #n_motif = len(is_motif)
+        #ipdb.set_trace()
+        cmp = partial(tensor_util.cmp, atol=5e-2, rtol=0)
+        bb_len = len(output_feats['seq'])
+        input_bb_xyz = torch.tensor(input_feats['xyz'][:,:1]) #only Ca()
+        input_bb_xyz = input_bb_xyz.reshape(bb_len,3)
+        output_bb_xyz = torch.tensor(output_feats['xyz'][:,:1])
+        output_bb_xyz = output_bb_xyz.reshape(bb_len,3)
+        bb_rmsd = float(rf2aa_util.kabsch(input_bb_xyz, output_bb_xyz)[0])
+        input_ligand_xyz = torch.tensor(input_feats['xyz_het'])
+        output_ligand_xyz = torch.tensor(output_feats['xyz_het'])
+        ligand_rmsd = float(rf2aa_util.kabsch(input_ligand_xyz, output_ligand_xyz)[0])
+        ipdb.set_trace()
+        self.assertLess(bb_rmsd, 2.0) #bb does change after refinement
+        self.assertLess(ligand_rmsd, 0.1)
 
 if __name__ == '__main__':
         #ipdb.set_trace()
