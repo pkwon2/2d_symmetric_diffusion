@@ -3,5 +3,7 @@ left_handed_alpha.py
 *.pyc
 *.swp
 *.pkl
+test_import.py
 __pycache__/
-
+.pytest_cache
+tmp/

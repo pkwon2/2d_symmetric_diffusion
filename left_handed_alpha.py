@@ -1,6 +1,8 @@
 from Bio import PDB
 from Bio.PDB import DSSP
 import os,sys,glob
+import pydssp
+import torch
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -10,14 +12,20 @@ def is_left_handed(pdb):
     structure = parser.get_structure("structure", pdb)
     model = structure[0]
     dssp = DSSP(model, pdb)
-    for resi, data in dssp.property_dict.items():
-        #phi, psi = data[2], data[3]
-        phi = data['PHI']
-        if phi < 0:# and psi < 0:
-            return True
-    return False
-
+    print(dssp)
+    # for resi, data in dssp.property_dict.items():
+    #     #phi, psi = data[2], data[3]
+    #     phi = data['PHI']
+    #     if phi > 0:# and psi > 0: ##SM input
+    # #         return True
+    # return False
+    return "SM"
 pdbs = glob.glob("/net/scratch/lhtran/repeat_dev/chain_break_debug/*.pdb")
+#print(is_left_handed(pdbs[0]))
+batch, length, atoms, xyz = 10, 100, 4, 3
+coord = torch.randn([batch, length, atom, xyz]) # batch-dim is optional
+dssp = pydssp.assign(coord, out_type='onehot')
+print(dssp)
 # #is_left_handed("/home/lhtran/projects/sm_binders/ef2_binder/EF2_0696_MET.pdb")
 # for pdb in pdbs:
 #     if is_left_handed(pdb):
