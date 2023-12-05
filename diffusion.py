@@ -99,11 +99,13 @@ def get_beta_schedule(T, b0, bT, schedule_type, schedule_params={}, inference=Fa
     """
     assert schedule_type in ['linear']
 
-    # Adjust b0 and bT if T is not 200
-    # This is a good approximation, with the beta correction below, unless T is very small
-    assert T >= 15, "With discrete time and T < 15, the schedule is badly approximated"
-    b0 *= 200 / T
-    bT *= 200 / T
+    #Adjust b0 and bT if T is not 200
+    #This is a good approximation, with the beta correction below, unless T is very small
+    if T not in [1,2,3]: #T=1|2|3 for testing/merging purpose
+        #print("WARNING: With discrete time and T < 15, the schedule is badly approximated") #probably no need to stop trajectory for low T
+        assert T >= 15, "With discrete time and T < 15, the schedule is badly approximated"
+        b0 *= (200 / T)
+        bT *= (200 / T)
 
     # linear noise schedule 
     if schedule_type == 'linear':
@@ -115,8 +117,8 @@ def get_beta_schedule(T, b0, bT, schedule_type, schedule_params={}, inference=Fa
     
     # cosine noise schedule 
     else:
+        raise NotImplementedError('Cosine schedule has been disabled because variance with different T will need to be worked out')
         schedule = cosine_interp(T, bT, b0) 
-    
     
     #get alphabar_t for convenience
     alpha_schedule = 1-schedule

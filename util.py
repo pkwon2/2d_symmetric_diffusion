@@ -1,4 +1,4 @@
-import sys
+import sys,os
 
 import numpy as np
 import torch
@@ -7,7 +7,7 @@ import scipy.sparse
 
 from chemical import *
 from scoring import *
-
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'RF2-allatom')) #see
 import rf2aa.kinematics
 import rf2aa.util
 

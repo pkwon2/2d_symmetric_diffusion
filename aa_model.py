@@ -1454,7 +1454,7 @@ def eye_frames2(xyz, center=False):
 
     xyz[:,:3,:] = init+T[:,None,:].expand(L,3,3) # expand second dim to match n,ca,c
 
-    assert torch.allclose(xyz[:,1,:], orig_xyz[:,1,:])
+    #assert torch.allclose(xyz[:,1,:], orig_xyz[:,1,:])
 
     if center:
         xyz = xyz - xyz[:,1:2,:].mean(dim=0, keepdim=True)

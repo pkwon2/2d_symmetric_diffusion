@@ -1,4 +1,5 @@
 import copy
+import string
 import torch
 from assertpy import assert_that
 import numpy as np
@@ -347,7 +348,6 @@ class Sampler:
 
         # other params
         binder_net = self._conf.inference.two_template
-
 
         # HACK: TODO: save this in the model config
         self.loss_param = {'lj_lin': 0.75}
@@ -1074,6 +1074,25 @@ def find_breaks(ix, thresh=1):
     breaks = np.where(np.diff(ix) > thresh)[0]
     return np.array(breaks)+1
 
+def pseudo_chainbreak(pdb_idx, break_idx): 
+    """
+    Breaks the chain at desired index 
+    """
+    out_idx = torch.clone(pdb_idx)
+    prev_break_idx = 0
+    Ls = []
+    for curr_break_idx in (str(break_idx).split("-")):
+        curr_break_idx = int(curr_break_idx)
+        #curr_break_idx = curr_break_idx - 1
+        out_idx[:,curr_break_idx:] += 200 # 1-indexed
+        Ls.append(curr_break_idx - prev_break_idx)
+        prev_break_idx = curr_break_idx
+    Ls.append(out_idx.shape[1] - prev_break_idx)
+
+    out_chids = []
+    for i, L in enumerate(Ls):
+        out_chids += [string.ascii_uppercase[i]]*L
+    return out_idx, out_chids
 
 def get_breaks(a, cut=1):
     # finds indices where jumps in a occur
@@ -1378,7 +1397,8 @@ class NRBStyleSelfCond(Sampler):
         bidx = self.inf_conf.pseudocycle_break
         idx_pdb = torch.tensor(self.contig_map.rf)[None]
         if bidx is not None:
-                idx_pdb, self.chain_idx = self.symmetry.pseudo_chainbreak(idx_pdb, bidx)
+                #idx_pdb, self.chain_idx = self.symmetry.pseudo_chainbreak(idx_pdb, bidx)
+                idx_pdb, self.chain_idx = pseudo_chainbreak(idx_pdb, bidx)
         # if it's first step, need to save first prediction for alignment later 
         px0_needs_align = False 
         first_px0_needs_save = False
@@ -1396,13 +1416,12 @@ class NRBStyleSelfCond(Sampler):
 
         ### symmetrize before passing through model
         if self.symmetry is not None:
-            # x_t_1, seq_t_1 = self.symmetry.apply_symmetry(x_t_1, seq_t_1)
+            #x_t_1, seq_t_1 = self.symmetry.apply_symmetry(x_t_1, seq_t_1)
             is_sm = indep.is_sm
 
-            # x_t_1, seq_t_1 = torch.clone(x_t_1), torch.clone(seq_t_1)
-            #self.inf_conf.T_break_sym
-            if self.inf_conf.T_break_sym is not None:
-                if t > self.inf_conf.T_break_sym: # If step T >= T_symm, do symmetrization, otherwise stop
+            #x_t_1, seq_t_1 = torch.clone(x_t_1), torch.clone(seq_t_1)
+            if self._conf.model.T_break_sym is not None:
+                if t > self._conf.model.T_break_sym: # If step T >= T_symm, do symmetrization, otherwise stop
                     xyz_to_sym = indep.xyz[~is_sm]
                     seq_to_sym = indep.seq[~is_sm]
 
@@ -1411,9 +1430,9 @@ class NRBStyleSelfCond(Sampler):
                     # put back into indep
                     indep.xyz[~is_sm] = xyz_sym_out
                     indep.seq[~is_sm] = seq_sym_out
-                else:
-                    print('breaking symmetry activated')
+
             else:
+                is_sm = indep.is_sm
                 xyz_to_sym = indep.xyz[~is_sm]
                 seq_to_sym = indep.seq[~is_sm]
 
@@ -1437,12 +1456,12 @@ class NRBStyleSelfCond(Sampler):
             # no chainbreaks etc because pseudocycle 
             if self.inf_conf.pseudocycle_break is not None:
                 bidx = self.inf_conf.pseudocycle_break # 1-indexed, res_no at chain break
-                idx_pdb, self.chain_idx = self.symmetry.pseudo_chainbreak(idx_pdb, bidx)
+                idx_pdb, self.chain_idx = pseudo_chainbreak(idx_pdb, bidx)
 
         # print('LENGTH OF IDX_PDB:', len(idx_pdb))
-                print('idx_pdb, bidx:' , idx_pdb, bidx)
+                #print('idx_pdb, bidx:' , idx_pdb, bidx)
                 print('self.chain_idx:', self.chain_idx)
-                print('t:', t)
+
         if not self.inf_conf.subsymm_t1d_perfect: 
             # all AA that are diffused (according to contigs) have intermediate confidences
             # even if they are templated in T2D 
@@ -1597,8 +1616,8 @@ class NRBStyleSelfCond(Sampler):
                 # This is the assertion we should be able to use, but the
                 # network's ComputeAllAtom requires even atoms to have N and C coords.                
                 # aa_model.assert_has_coords(rfi.xyz[0], indep)
-                assert not rfi.xyz[0,:,:3,:].isnan().any(), f'{t}: {rfi.xyz[0,:,:3,:]}'
-             
+                assert not rfi.xyz[0,:,:3,:].isnan().any(), f'{t}: {rfi.xyz[0,:,:3,:]}' #LT is asssertion needed?
+
                 # rfo = self.model_adaptor.forward(rfi, return_infer=True, **({model_input_logger.LOG_ONLY_KEY: {'t':t, 'output_prefix':self.output_prefix,}} if self._conf.logging.inputs else {}))
                 kwargs = {model_input_logger.LOG_ONLY_KEY: {'t':t, 'output_prefix':self.output_prefix,}} if self._conf.logging.inputs else {}
                 kwargs.update({'symmids':self.symmids,
@@ -1789,15 +1808,13 @@ class NRBStyleSelfCond(Sampler):
         px0 = px0.cpu()
         x_t_1 = x_t_1.cpu()
         seq_t_1 = seq_t_1.cpu()
-
         if self.symmetry is not None:
-            # x_t_1, seq_t_1 = self.symmetry.apply_symmetry(x_t_1, seq_t_1)
-            if self.inf_conf.T_break_sym is not None:
-                if t > self.inf_conf.T_break_sym:
+            #x_t_1, seq_t_1 = self.symmetry.apply_symmetry(x_t_1, seq_t_1)
+            if self._conf.model.T_break_sym is not None:
+                if t > self._conf.model.T_break_sym:
                     is_sm = indep.is_sm
 
                     # x_t_1, seq_t_1 = torch.clone(x_t_1), torch.clone(seq_t_1)
-
 
                     xyz_to_sym = x_t_1[~is_sm]
                     seq_to_sym = seq_t_1[~is_sm]
@@ -1810,7 +1827,6 @@ class NRBStyleSelfCond(Sampler):
                 is_sm = indep.is_sm
 
                 # x_t_1, seq_t_1 = torch.clone(x_t_1), torch.clone(seq_t_1)
-
 
                 xyz_to_sym = x_t_1[~is_sm]
                 seq_to_sym = seq_t_1[~is_sm]

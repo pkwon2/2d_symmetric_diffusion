@@ -1,0 +1,2 @@
+apptainer exec --nv /mnt/net/software/containers/users/dtischer/rf_diffusion_aa.sif pytest test_inference.py -s
+

@@ -5,8 +5,7 @@ inference:
   output_prefix: debug/aa_small
   model_runner: NRBStyleSelfCond
   input_pdb: 'benchmark/input/gaa.pdb'
+  ij_visible: null
 
 contigmap:
   contigs: ['1,A518-518,1']
-  length: 3-3
-

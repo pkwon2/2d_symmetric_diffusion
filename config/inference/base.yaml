@@ -1,5 +1,5 @@
 # Base inference Configuration.
-
+# ckpt_path is picked from DJ's trainning session
 inference:
   input_pdb: test_data/1qys.pdb
   num_designs: 10
@@ -9,7 +9,8 @@ inference:
   #ckpt_path: /mnt/net/databases/diffusion/models/Diff_t1d_31_t2d_47_082222_epoch19.pt
   #ckpt_path: /net/databases/diffusion/models/Diff_t1d_32_t2d_47_disp_fixed_finetuned_082622_epoch10.pt
   #ckpt_path: /net/databases/diffusion/models/Diff_rollback_epoch8.pt
-  ckpt_path: /net/databases/diffusion/nate_tmp/new_SelfCond_crdscale0.25/models/BFF_4.pt
+  #ckpt_path: /net/databases/diffusion/nate_tmp/new_SelfCond_crdscale0.25/models/BFF_4.pt
+  ckpt_path: /mnt/projects/ml/aa_template/checkpoints/train_session2023-10-16_1697485321.3859591/models/BFF_7.pt
   ppi_design: False
   autogenerate_contigs: False
   symmetry: null
@@ -41,7 +42,7 @@ inference:
   subsymm_template: null 
   subsymm_t1d_perfect: False
   subsymm_template_xt_only: False
-  subsymm_template_all_possible: True 
+  subsymm_template_all_possible: False 
   input_xyz_t: False
   rigid_symm_motif: False
   initial_rigid_motif: False
@@ -64,7 +65,7 @@ inference:
   align_px0_motif: True
   pseudo_symmetry: null
   pseudocycle_break: null
-  T_break_sym: null
+  str_self_cond: False
 
 
 contigmap:
@@ -130,15 +131,16 @@ model:
   lock_symmsubs_at: -1
   allow_particle_recenter: False 
   pseudo_cycle: False 
+  T_break_sym: null
 
 diffuser:
-  T: 200
+  T: 50
   b_0: 1e-2
   b_T: 7e-2
   schedule_type: linear
   so3_type: igso3
   eucl_type: standard
-  aa_decode_steps: 40
+  aa_decode_steps: 49
   chi_type: wrapped_normal
   crd_scale: 0.0667
   schedule_kwargs: {}
@@ -187,7 +189,6 @@ preprocess:
   d_t1d: 22
   d_t2d: 44
   prob_self_cond: 0.0
-  str_self_cond: False
   seq_self_cond: False
   predict_previous: False
   eye_frames: False 

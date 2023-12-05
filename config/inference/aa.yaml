@@ -1,8 +1,9 @@
 # Base inference Configuration.
 defaults:
   - base
-
+#ckpt_path could change here, pick a random one from DJ's trainning session
 inference:
-  ckpt_path: /home/ahern/projects/rf_diffusion/train_session2023-01-09_1673291857.7027779/models/BFF_10.pt
+  ckpt_path: /projects/ml/aa_template/checkpoints/train_session2023-10-16_1697485321.3859591/models/BFF_7.pt
   align_motif: False
   str_self_cond: True
+

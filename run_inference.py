@@ -152,7 +152,8 @@ def get_sampler(conf, preloaded_ckpts={}, prebuilt_models={}):
         existing = glob.glob(conf.inference.output_prefix + '*.pdb')
         indices = [-1]
         for e in existing:
-            m = re.match('.*_(\d+)\.pdb$', e)
+            #m = re.match('.*_(\d+)\.pdb$', e) #og
+            m = re.match(f'{conf.inference.output_prefix}_(\\d+).*\\.pdb$', e) #fix for test_inference errors
             if not m:
                 continue
             m = m.groups()[0]
