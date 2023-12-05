@@ -9,7 +9,7 @@
 git submodule init
 git submodule update
 ```
-4. `cd` into `RF2-allatom/rf2aa` which should now be full of code. Now do `git checkout rf2aa-repeats-2template`.
+4. `cd` into `RF2-allatom/rf2aa` which should now be full of code. Now do `git checkout 3template_pseudo1`.
 5. Stay where you are, do `git pull`.
 
 If this series of steps doesn't work, let DJ know! 
