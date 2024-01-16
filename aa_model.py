@@ -1,7 +1,6 @@
 import torch
 import assertpy
 import torch.nn.functional as F
-# import ipdb
 import dataclasses
 from icecream import ic
 from assertpy import assert_that
@@ -29,6 +28,7 @@ import rotation_conversions
 
 from kinematics import th_kabsch
 
+import ipdb
 
 NINDEL=1
 NTERMINUS=2
@@ -267,7 +267,7 @@ class Model:
                 return RFO(*model(**input))
 
 
-    def make_indep(self, pdb, parse_hetatm, refine=False, refine_w_ligand=False):
+    def make_indep(self, pdb, parse_hetatm, refine=False, refine_w_ligand=False, multi=True):
         # self.target_feats = iu.process_target(self.inf_conf.input_pdb, parse_hetatom=True, center=False)
         # init_protein_tmpl=False, init_ligand_tmpl=False, init_protein_xyz=False, init_ligand_xyz=False,
         #     parse_hetatm=False, n_cycle=10, random_noise=5.0)
@@ -278,7 +278,8 @@ class Model:
         atom_frames = torch.zeros((0,3,2))
 
         xyz_prot, mask_prot, idx_prot, seq_prot = parsers.parse_pdb(pdb, seq=True)
-
+        print('pdb name = ', pdb)
+        multi = False
         target_feats = inference.utils.parse_pdb(pdb)
         xyz_prot, mask_prot, idx_prot, seq_prot = target_feats['xyz'], target_feats['mask'], target_feats['idx'], target_feats['seq']
         xyz_prot[:,14:] = 0 # remove hydrogens
@@ -289,7 +290,15 @@ class Model:
         msa_prot = torch.tensor(seq_prot)[None].long()
         ins_prot = torch.zeros(msa_prot.shape).long()
         a3m_prot = {"msa": msa_prot, "ins": ins_prot}
-
+        print(f'protein_L = {protein_L}')
+        #ipdb.set_trace()
+        if multi and self.conf.inference.pseudocycle_break is not None:
+            break_idx = self.conf.inference.pseudocycle_break
+            for break_id in (str(break_idx).split("-")):
+                #assert int(break_id) < protein_L, f'pseudocycle_break {break_id} must be less than protein length {protein_L}'
+                assert int(break_id) > 0, f'pseudocycle_break {break_id} must be greater than 0'
+                #protein_L = int(break_idx.split("-")[0])
+        
         if parse_hetatm:
             with open(pdb, 'r') as fh:
                 stream = [l for l in fh if "HETATM" in l or "CONECT" in l]
@@ -339,18 +348,30 @@ class Model:
         bond_feats[:Ls[0], :Ls[0]] = rf2aa.util.get_protein_bond_feats(Ls[0])
         if parse_hetatm:
             bond_feats[Ls[0]:, Ls[0]:] = rf2aa.util.get_bond_feats(mol)
-
+        #ipdb.set_trace()
+        if multi and self.conf.inference.pseudocycle_break is not None:
+            for i in (str(break_idx).split("-")):
+                break_id = int(i)
+                #bond_feats[break_id-1, break_id] = 1
+                bond_feats[break_id-1][break_id] = torch.tensor(0)#zeros(sum(Ls))
+                bond_feats[break_id][break_id-1] = torch.tensor(0)
 
         same_chain = torch.zeros((sum(Ls), sum(Ls))).long()
         same_chain[:Ls[0], :Ls[0]] = 1
         same_chain[Ls[0]:, Ls[0]:] = 1
         is_sm = torch.zeros(sum(Ls)).bool()
         is_sm[Ls[0]:] = True
-        assert len(Ls) <= 2, 'multi chain inference not implemented yet'
+        #assert len(Ls) <= 2, 'multi chain inference not implemented yet' # LT about to
         terminus_type = torch.zeros(sum(Ls))
         terminus_type[0] = N_TERMINUS
         terminus_type[Ls[0]-1] = C_TERMINUS
+        if multi and self.conf.inference.pseudocycle_break is not None:
+            for i in (str(break_idx).split("-")):
+                break_id = int(i)
+                terminus_type[break_id-1] = C_TERMINUS
+                terminus_type[break_id] = N_TERMINUS
 
+        #ipdb.set_trace()
         metadata = {} # default empty 
 
         # refinement of pdbs that were diffused and have a trb file 
@@ -386,13 +407,14 @@ class Model:
 
             xyz2[:,14:] = 0 # remove hydrogens
 
-            # dictionary containing refinement-assocaited info 
+            # dictionary containing refinement-assocaited info # LT try to add terminus_type/chain break here
             ref_dict = {}
             ref_dict['ij_visible'] = ij_visible
             ref_dict['con_ref_idx0'] = data['con_ref_idx0']
             ref_dict['con_hal_idx0'] = data['con_hal_idx0']
             ref_dict['ligand'] = conf['inference']['ligand']
             ref_dict['src_trb'] = trb
+            ref_dict['terminus_type'] = data['indep']['terminus_type']
 
             
             # get sm data 
@@ -443,7 +465,7 @@ class Model:
         return indep
 
 
-    def insert_contig(self, indep, contig_map, partial_T=False, refine=False):
+    def insert_contig(self, indep, contig_map, partial_T=False, refine=False, multi=True):
         """
         Assembl
         """
@@ -451,11 +473,16 @@ class Model:
 
         # Insert small mol into contig_map
         all_chains = set(ch for ch,_ in contig_map.hal)
+        break_idx = self.conf.inference.pseudocycle_break
+        if break_idx is not None and multi:
+            num_break = len(str(break_idx).split("-"))
+            for i in range(num_break):
+                all_chains.add(next(add_c for add_c in contig_map.chain_order if add_c not in all_chains))
         #print(all_chains)
         # Not yet implemented due to index shifting
         # assert_that(len(all_chains)).is_equal_to(1)
         print(f'WARNING: only 1 chain supported for now. Found {len(all_chains)} chains: {all_chains}')
-
+        #ipdb.set_trace()
         # string
         next_unused_chain = next(e for e in contig_map.chain_order if e not in all_chains)
 
@@ -465,18 +492,38 @@ class Model:
         # list of indices of small molecule atoms - 0 indexed
         is_sm_idx0 = torch.nonzero(indep.is_sm, as_tuple=True)[0].tolist()
         contig_map.ref_idx0.extend(is_sm_idx0)
+        
 
         n_protein_hal       = len(contig_map.hal)
         contig_map.hal_idx0 = np.concatenate((contig_map.hal_idx0, np.arange(n_protein_hal, n_protein_hal+n_sm)))
 
         max_hal_idx = max(i for _, i  in contig_map.hal)
+        all_chains = list(sorted(all_chains))
+        #ipdb.set_trace()
+
+        if break_idx is not None and multi:
+            k = 0
+            curr_chain_idx = 0
+            break_idxs = [int(i) for i in str(break_idx).split("-")]
+            bidx = break_idxs[k]
+            for resi in contig_map.hal:
+                # curr_chain = resi[0]
+                # curr_chain_idx = all_chains.index(curr_chain)
+                contig_map.hal[resi[1]-1] = (all_chains[curr_chain_idx], resi[1])
+                if int(resi[1]) == bidx: #start a new chain
+                    #ipdb.set_trace()
+                    curr_chain_idx += 1
+                    #curr_chain = all_chains[curr_chain_idx]
+                    contig_map.hal[resi[1]-1] = (all_chains[curr_chain_idx], resi[1])
+                    if k < len(break_idxs)-1:
+                        k += 1
+                        bidx = break_idxs[k]
 
         # NOTE - this makes all small molecules in the same chain
         print(f'WARNING: putting all small molecules in the same chain. Chain: {next_unused_chain}')
         contig_map.hal.extend(zip([next_unused_chain]*n_sm, range(max_hal_idx+200,max_hal_idx+200+n_sm)))
 
         chain_id = np.array([c for c, _ in contig_map.hal])
-
         L_mapped = len(contig_map.hal)
         n_prot   = L_mapped - n_sm
         L_in, NATOMS, _ = indep.xyz.shape
@@ -512,6 +559,16 @@ class Model:
         n_prot_ref = L_in-n_sm
         o.bond_feats[n_prot:, n_prot:] = indep.bond_feats[n_prot_ref:, n_prot_ref:]
 
+        #ipdb.set_trace()
+
+        if break_idx is not None and multi:
+            break_idxs = [int(i) for i in str(break_idx).split("-")]
+            for bidx in break_idxs:
+                o.bond_feats[bidx-1][bidx] = torch.tensor(0)
+                o.bond_feats[bidx][bidx-1] = torch.tensor(0)
+            #o.bond_feats[break_idxs[0]-1][break_idxs[0]] = torch.tensor(0)
+
+        
         hal_by_ref_d = dict(zip(contig_map.ref_idx0, contig_map.hal_idx0))
         def hal_by_ref(ref):
             return hal_by_ref_d[ref]
@@ -524,6 +581,12 @@ class Model:
         o.terminus_type[0] = N_TERMINUS
         o.terminus_type[n_prot-1] = C_TERMINUS
 
+        if break_idx is not None and multi:
+            break_idxs = [int(i) for i in str(break_idx).split("-")]
+            for bidx in break_idxs:
+                o.terminus_type[bidx-1] = C_TERMINUS
+                o.terminus_type[bidx] = N_TERMINUS
+        # DJ - new for three template
         # is_diffused = torch.
         is_diffused_prot = ~torch.from_numpy(contig_map.inpaint_str)
         is_diffused_sm = torch.zeros(n_sm).bool()
@@ -536,7 +599,7 @@ class Model:
             pass # want to keep original xyz2 because it contains perfect motif  
         else:
             o.xyz2 = o.xyz.clone() # DJ - three template, dummy xyz for now
-
+        #ipdb.set_trace()
         return o, is_diffused
 
 
@@ -577,6 +640,7 @@ class Model:
 
         (1) Replace the sequence at HAL positions in current inputs with the motif sequence from src pdb
         (2) Use xyz2 (coordinates of original pdb) for motif in 3rd template
+        (3) LT try to add chain break/terminus_type for multi chain refinement?
         
         """
         if indep.metadata.get('refinement', None) is not None:
@@ -936,8 +1000,8 @@ def assert_has_coords(xyz, indep):
         assert not sm_missing_ca.any(), f'sm_missing_ca {sm_missing_ca}'
     except Exception as e:
         print(e)
-        import ipdb
-        ipdb.set_trace()
+        # import ipdb
+        # ipdb.set_trace()
 
 
 def has_coords(xyz, indep):
@@ -950,8 +1014,8 @@ def has_coords(xyz, indep):
         assert not sm_missing_ca.any(), f'sm_missing_ca {sm_missing_ca}'
     except Exception as e:
         print(e)
-        import ipdb
-        ipdb.set_trace()
+        # import ipdb
+        # ipdb.set_trace()
 
 
 def pad_dim(x, dim, new_l):

@@ -55,7 +55,7 @@ from model_input_logger import pickle_function_call
 TOR_INDICES  = util.torsion_indices
 TOR_CAN_FLIP = util.torsion_can_flip
 REF_ANGLES   = util.reference_angles
-
+#import ipdb
 class Sampler:
 
     def __init__(self, conf: DictConfig, preloaded_ckpts={}, prebuilt_models={}):
@@ -1396,9 +1396,20 @@ class NRBStyleSelfCond(Sampler):
         threetemplate = self.inf_conf.three_template
         bidx = self.inf_conf.pseudocycle_break
         idx_pdb = torch.tensor(self.contig_map.rf)[None]
-        if bidx is not None:
+        if bidx is not None: #do chain break here
                 #idx_pdb, self.chain_idx = self.symmetry.pseudo_chainbreak(idx_pdb, bidx)
                 idx_pdb, self.chain_idx = pseudo_chainbreak(idx_pdb, bidx)
+                chain_idx_set = list((set(self.chain_idx)))
+                cuts = []
+                for cis in chain_idx_set:
+                    cut_append = self.chain_idx.index(cis)
+                    if cut_append != 0:
+                        cuts.append(self.chain_idx.index(cis))
+                    #ipdb.set_trace()
+                for cut in cuts:
+                    indep.terminus_type[cut-1] = torch.tensor(2) #C term
+                    indep.terminus_type[cut] = torch.tensor(1) #N term
+                    #ipdb.set_trace()
         # if it's first step, need to save first prediction for alignment later 
         px0_needs_align = False 
         first_px0_needs_save = False
