@@ -1644,12 +1644,12 @@ class NRBStyleSelfCond(Sampler):
                     mem_report() 
                     print('*'*50+'\n\n')
 
-                #debugging 
-                # tmp_out = copy.deepcopy(rfi)
-                # rf2aa.tensor_util.to_device(tmp_out, torch.device('cpu'))
-                # with open('rfi_eye_inference_with_seq.pkl','wb') as f:
-                #     pickle.dump(tmp_out,f)
-                # sys.exit('Exiting for debugging')
+                if self._conf.inference.cyclic_protein_indices: 
+                    cyclic_reses = torch.ones(rfi.xyz.squeeze().shape[0]).bool().to(rfi.xyz.device)
+                    cyclic_reses[indep.is_sm] = False
+                else:
+                    cyclic_reses = None 
+                kwargs['cyclic_reses'] = cyclic_reses
 
                 if self.inf_conf.refine: 
                     N_cycle = self.inf_conf.refine_recycles

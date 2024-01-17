@@ -66,6 +66,8 @@ inference:
   pseudo_symmetry: null
   pseudocycle_break: null
   str_self_cond: False
+  T_break_sym: null
+  cyclic_protein_indices: False 
 
 
 contigmap:
