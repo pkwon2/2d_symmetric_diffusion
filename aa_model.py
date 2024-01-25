@@ -25,7 +25,7 @@ import random
 from typing import Optional 
 from rf2aa.util_module import XYZConverter
 import rotation_conversions
-
+import string 
 from kinematics import th_kabsch
 
 import ipdb
@@ -412,6 +412,8 @@ class Model:
             ref_dict['ij_visible'] = ij_visible
             ref_dict['con_ref_idx0'] = data['con_ref_idx0']
             ref_dict['con_hal_idx0'] = data['con_hal_idx0']
+            ref_dict['complex_ref_idx0'] = data['complex_con_ref_idx0']
+            ref_dict['complex_hal_idx0'] = data['complex_con_hal_idx0']
             ref_dict['ligand'] = conf['inference']['ligand']
             ref_dict['src_trb'] = trb
             ref_dict['terminus_type'] = data['indep']['terminus_type']
@@ -463,6 +465,21 @@ class Model:
             metadata)
 
         return indep
+    
+
+    @staticmethod
+    def assign_chunk_letters(sequence):
+        """
+        Input: sequence of integers
+        Output: list of letters, where each letter corresponds to a sequence of consecutive integers in the input
+        """
+        letters = ['a']
+        current_letter = 'a'
+        for i in range(1,len(sequence)):
+            if sequence[i] != sequence[i-1] + 1:
+                current_letter = chr(ord(current_letter) + 1)
+            letters.append(current_letter)
+        return letters
 
 
     def insert_contig(self, indep, contig_map, partial_T=False, refine=False, multi=True):
@@ -485,6 +502,15 @@ class Model:
         #ipdb.set_trace()
         # string
         next_unused_chain = next(e for e in contig_map.chain_order if e not in all_chains)
+
+        prot_ijvis_letters = self.assign_chunk_letters(contig_map.hal_idx0)
+        if refine: 
+            # find the original hal idx0  
+            prot_ijvis_letters = self.assign_chunk_letters(indep.metadata['refinement']['complex_hal_idx0'])
+
+        used_ijvis_letters = set(prot_ijvis_letters)
+        next_ijvis_letter  = next(e for e in string.ascii_lowercase if e not in used_ijvis_letters)
+
 
         # number of small molecule atoms
         n_sm = indep.is_sm.sum()
@@ -523,6 +549,10 @@ class Model:
         print(f'WARNING: putting all small molecules in the same chain. Chain: {next_unused_chain}')
         contig_map.hal.extend(zip([next_unused_chain]*n_sm, range(max_hal_idx+200,max_hal_idx+200+n_sm)))
 
+        sm_ijvis_letters = [next_ijvis_letter]*n_sm
+        ijvis_letters = prot_ijvis_letters + sm_ijvis_letters
+        o.metadata['ijvis_letters'] = ijvis_letters
+        
         chain_id = np.array([c for c, _ in contig_map.hal])
         L_mapped = len(contig_map.hal)
         n_prot   = L_mapped - n_sm
@@ -575,7 +605,27 @@ class Model:
         hal_by_ref = np.vectorize(hal_by_ref, otypes=[float])
         o.chirals[...,:-1] = torch.tensor(hal_by_ref(o.chirals[...,:-1]))
 
-        o.idx = torch.tensor([i for _, i in contig_map.hal])
+
+        ix =[]
+        offset = 0; cur_chain = 'A'
+        for i,(chain,pdbix) in enumerate(contig_map.hal):
+            if chain != cur_chain:
+                offset += 200
+                cur_chain = chain
+            ix.append(pdbix+offset)
+        # o.idx = torch.tensor([i for _, i in contig_map.hal])
+        o.idx = torch.tensor(ix)
+
+        if self.conf.inference.helical_breaks: # helical symmetry, break repeat at asu boundary
+            Nchain = o.xyz.shape[0] // self.conf.model.repeat_length 
+            ix = []
+            offset = 0
+            start = 0
+            for i in range(Nchain):
+                ix.append(torch.arange(start, start+o.xyz.shape[0] // Nchain) + offset)
+                start = start+o.xyz.shape[0] // Nchain
+                offset += 200
+            o.idx = torch.cat(ix)
 
         o.terminus_type = torch.zeros(L_mapped)
         o.terminus_type[0] = N_TERMINUS
@@ -649,6 +699,9 @@ class Model:
             refine=True
             src_con_hal_idx0 = torch.from_numpy( ref_dict['con_hal_idx0'] )
             src_con_ref_idx0 = torch.from_numpy( ref_dict['con_ref_idx0'] )
+            if len(ref_dict['complex_hal_idx0']) > len(src_con_hal_idx0): 
+                src_con_hal_idx0 = torch.from_numpy( ref_dict['complex_hal_idx0'] )
+                src_con_ref_idx0 = torch.from_numpy( ref_dict['complex_ref_idx0'] )
 
             # replace the sequence w/ sequence from original motif
             if len(src_con_hal_idx0) > 0:

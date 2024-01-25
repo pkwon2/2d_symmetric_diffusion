@@ -198,6 +198,7 @@ class Sampler:
         # self.allatom = ComputeAllAtomCoords().to(self.device)
         self.converter = XYZConverter() 
         
+
         self.target_feats = iu.process_target(self.inf_conf.input_pdb, parse_hetatom=False, center=False, inf_conf=self.inf_conf)
         self.chain_idx = None
 
@@ -227,6 +228,7 @@ class Sampler:
 
     def process_target(self, pdb_path):
         assert not (self.inf_conf.ppi_design and self.inf_conf.autogenerate_contigs), "target reprocessing not implemented yet for these configuration arguments"
+        
         self.target_feats = iu.process_target(self.inf_conf.input_pdb)
         self.chain_idx = None
 
@@ -402,10 +404,31 @@ class Sampler:
             seq_len = target_feats['seq'].shape[0]
             self.contig_conf.contigs = [f'{self.ppi_conf.binderlen}',f'B{self.ppi_conf.binderlen+1}-{seq_len}']
         self._log.info(f'Using contig: {self.contig_conf.contigs}')
+
+        chains = [a[0] for a in target_feats['pdb_idx']]
+        unique_chains = list(sorted(set(chains)))
+         
+
         
         if self.inf_conf.refine: 
-            L = len(self.target_feats['seq'].squeeze())
-            self.contig_conf['contigs'] = [f'{L}-{L}']
+
+            if len(unique_chains) == 1:
+                L = len(self.target_feats['seq'].squeeze())
+                self.contig_conf['contigs'] = [f'{L}-{L}']
+            
+            elif len(unique_chains) > 1: 
+                # need to make contigs for each chain 
+                # first get the chain lengths 
+                chain_lengths = []
+                for chain in unique_chains:
+                    chain_lengths.append(chains.count(chain))
+
+                # now make contigs 
+                contig_str = []
+                for i, chain in enumerate(unique_chains):
+                    chain_len = chain_lengths[i]
+                    contig_str.append( f'{chain_len}-{chain_len}' )
+                self.contig_conf['contigs'] = [' '.join(contig_str)]
 
         return ContigMap(target_feats, **self.contig_conf)
 
@@ -437,6 +460,7 @@ class Sampler:
             seq_t: Starting sequence with a portion of them set to unknown.
         """
         # moved this here as should be updated each iteration of diffusion
+        
         self.contig_map = self.construct_contig(self.target_feats)
 
 
@@ -1129,8 +1153,25 @@ def find_true_chunks_indices(tensor):
     chunks.append((start, prev))
     return chunks
 
+def find_contiguous_regions(array):
+    regions = []
+    start = None
+    prev_entry = None
 
-def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat, supplied_full_contig):
+    for i, entry in enumerate(array):
+        if entry != prev_entry:
+            if start is not None:
+                regions.append((start, i))
+            start = i
+        prev_entry = entry
+
+    if start is not None:
+        regions.append((start, len(array)))
+
+    return regions
+
+
+def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat, supplied_full_contig, ij_vis_letters):
     """
     Given contig map and motif chunks that can see each other, create t2d mask
     defining which motif chunks can see each other. 
@@ -1146,15 +1187,20 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat, supplied_full_c
 
     nrepeat (int): Number of repeat units in repeat protein being modelled 
     """
+    ij_cat = set([i for S in ij_is_visible for i in S])
+    nchunk_total = len(ij_cat)
+    if not supplied_full_contig:
+        nchunk_total *= nrepeat
+
     assert all([type(x) == tuple for x in ij_is_visible]), 'ij_is_visible must be list of tuples'
     # assert L%nrepeat == 0
     Lasu = L // nrepeat
 
     # (1) Define matrix where each row/col is a motif chunk, entries are 1 if motif chunks can see each other
     #     and 0 otherwise.
-    breaks = get_breaks(con_hal_idx0)
-    nchunk = len(breaks) + 1
-    nchunk_total = nchunk * nrepeat
+    # breaks = get_breaks(con_hal_idx0)
+    # nchunk = len(breaks) + 1
+    # nchunk_total = nchunk * nrepeat
 
     
     # initially empty
@@ -1182,7 +1228,10 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat, supplied_full_c
     # make 1D array designating which chunks are motif
     is_motif = torch.zeros(L)
     is_motif[con_hal_idx0_full] = 1 
-    breaks2 = find_true_chunks_indices(is_motif)
+    # breaks2 = find_true_chunks_indices(is_motif)
+
+    breaks2 = find_contiguous_regions(ij_vis_letters)
+    breaks2 = [(con_hal_idx0_full[breaks2[i][0]], con_hal_idx0_full[breaks2[i][1]-1]) for i in range(len(breaks2))]
 
     # fill in 2d mask
     for i in range(len(breaks2)):
@@ -1200,7 +1249,13 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat, supplied_full_c
     return mask2d, is_motif
 
 
-def parse_ij_get_repeat_mask(ij_visible, L, n_repeat, con_hal_idx0, supplied_full_contig, is_sm):
+def parse_ij_get_repeat_mask(ij_visible, 
+                             L, 
+                             n_repeat, 
+                             con_hal_idx0, 
+                             supplied_full_contig, 
+                             is_sm,
+                             ij_vis_letters):
     """
     Helper function for getting repeat protein mask 2d info
     """
@@ -1233,7 +1288,12 @@ def parse_ij_get_repeat_mask(ij_visible, L, n_repeat, con_hal_idx0, supplied_ful
 
 
     # create a mask of which chunks are visible to each other compatible with contigs/con_hal_idx0
-    mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, n_repeat, supplied_full_contig)
+    mask_t2d, _ = get_repeat_t2d_mask(L, 
+                                      con_hal_idx0, 
+                                      ij_visible_int, 
+                                      n_repeat, 
+                                      supplied_full_contig,
+                                      ij_vis_letters=ij_vis_letters)
 
     return mask_t2d
 
@@ -1254,8 +1314,12 @@ class NRBStyleSelfCond(Sampler):
             refine = False
 
 
-        con_hal_idx0 = torch.from_numpy( self.contig_map.get_mappings()['con_hal_idx0'] )
-
+        con1 = torch.from_numpy( self.contig_map.get_mappings()['con_hal_idx0'] )
+        con2 = torch.from_numpy( self.contig_map.get_mappings().get('complex_con_hal_idx0', np.array([0])) )
+        if len(con1) > len(con2):
+            con_hal_idx0 = con1
+        else: 
+            con_hal_idx0 = con2
 
         # Assume that SM input will always be motif!! 
         if indep.is_sm.any():
@@ -1270,6 +1334,9 @@ class NRBStyleSelfCond(Sampler):
         if refine: 
             # we can rely on src_con_hal to tell us where in THIS hal the motif goes 
             src_con_hal_idx0 = torch.from_numpy( ref_dict['con_hal_idx0'] )
+            if len(ref_dict['complex_hal_idx0']) > len(src_con_hal_idx0): 
+                src_con_hal_idx0 = torch.from_numpy( ref_dict['complex_hal_idx0'] )
+         
             # src_con_ref_idx0 = torch.from_numpy( ref_dict['src_con_ref_idx0'] )
             
             assert is_protein_motif.sum() == 0
@@ -1277,7 +1344,7 @@ class NRBStyleSelfCond(Sampler):
             if len(src_con_hal_idx0) > 0:
                 is_protein_motif[src_con_hal_idx0] = True 
                 con_hal_idx0 = src_con_hal_idx0
-            elif self._conf.inference.refine_w_ligand: 
+            elif self._conf.inference.refine_w_ligand:
                 # had ligand but no protein motif, don't exit with empty masks 
                 src_con_hal_idx0 = con_hal_idx0 # con_hal_idx0 should have been set above w/ ligand indices
             else:
@@ -1285,6 +1352,7 @@ class NRBStyleSelfCond(Sampler):
                 mask_t2d = torch.zeros((L,L))
                 return is_protein_motif, mask_t2d
 
+        
 
 
         if not torch.any(is_protein_motif) and not self._conf.inference.ligand:
@@ -1333,7 +1401,12 @@ class NRBStyleSelfCond(Sampler):
                 ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
                 ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
 
-                mask_t2d, _ = get_repeat_t2d_mask(L, con_hal_idx0, ij_visible_int, 1, supplied_full_contig=True)
+                mask_t2d, _ = get_repeat_t2d_mask(L, 
+                                                  con_hal_idx0, 
+                                                  ij_visible_int, 
+                                                  1, 
+                                                  supplied_full_contig=True,
+                                                  ij_vis_letters=indep.metadata['ijvis_letters'])
             
             else:
                 # repeat/symmetric case
@@ -1356,7 +1429,13 @@ class NRBStyleSelfCond(Sampler):
                 ### t2d_is_revealed ###
                 n_repeat = self._conf.inference.n_repeats
                 L = len(is_protein_motif)
-                mask_t2d = parse_ij_get_repeat_mask(self._conf.inference.ij_visible, L, n_repeat, con_hal_idx0, supplied_full_contig, indep.is_sm)
+                mask_t2d = parse_ij_get_repeat_mask(self._conf.inference.ij_visible, 
+                                                    L, 
+                                                    n_repeat, 
+                                                    con_hal_idx0, 
+                                                    supplied_full_contig, 
+                                                    indep.is_sm,
+                                                    ij_vis_letters=indep.metadata['ijvis_letters'])
 
 
                 
@@ -1508,7 +1587,7 @@ class NRBStyleSelfCond(Sampler):
         ##################################
         self_cond = False
         cond_A = ((t < self.diffuser.T) and (t != self.diffuser_conf.partial_T)) and self._conf.inference.str_self_cond
-        ic(self._conf.inference.str_self_cond)
+        # ic(self._conf.inference.str_self_cond)
         cond_B = not self.inf_conf.refine  # cannot self cond with refinement model
         if cond_A and cond_B:
             # in the middle of the traj, so self condition on previous px0

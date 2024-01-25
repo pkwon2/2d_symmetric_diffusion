@@ -323,6 +323,10 @@ def sample_one(sampler, simple_logging=False):
                 con_ref = indep.metadata['refinement']['con_ref_idx0']
                 con_hal = indep.metadata['refinement']['con_hal_idx0']
 
+                if len(indep.metadata['refinement']['complex_ref_idx0']) > len(con_ref):
+                    con_ref = indep.metadata['refinement']['complex_ref_idx0']
+                    con_hal = indep.metadata['refinement']['complex_hal_idx0']
+
 
                 # if there was a protein motif, align on the motif to native (BB)
                 # and add native SC conformations 
@@ -507,7 +511,17 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
     # determine lengths of protein and ligand for correct chain labeling in output pdb
     # sm_mask = rf2aa.util.is_atom(final_seq)
     sm_mask = indep.is_sm
-    chain_Ls = [len(sm_mask)-sm_mask.sum(), sm_mask.sum()] # assumes 1 protein followed by 1 ligand
+    nsm = sm_mask.sum()
+
+    chain_Ls = [] 
+    hal_chains = np.array([a[0] for a in sampler.contig_map.hal])
+    uniq_letters = np.unique(hal_chains)
+    for letter in uniq_letters:
+        chain_Ls.append((hal_chains==letter).sum())
+    chain_Ls.append(nsm)
+    
+    
+    
     CHAINS = []
     prev_pseudocycle_break = 0
     if sampler.inf_conf.pseudocycle_break is not None:
@@ -523,12 +537,14 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
         CHAINS.append(sm_mask.sum())
         #chain_Ls = [CHAINS, sm_mask.sum()]
         chain_Ls = CHAINS
+    
     print('CHAIN_LS:', chain_Ls)
         
         
     # pX0 last step
     out = f'{out_prefix}.pdb'
-    # pdb.set_trace()
+
+    # compute chain/idx 
     aa_model.write_traj(out, 
                         denoised_xyz_stack[0:1], 
                         final_seq, 
