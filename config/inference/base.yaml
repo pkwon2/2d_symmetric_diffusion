@@ -68,6 +68,7 @@ inference:
   str_self_cond: False
   T_break_sym: null
   cyclic_protein_indices: False 
+  helical_breaks: False
 
 
 contigmap:
