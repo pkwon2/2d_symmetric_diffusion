@@ -27,7 +27,7 @@ from rf2aa.util_module import XYZConverter
 import rotation_conversions
 import string 
 from kinematics import th_kabsch
-
+import pdb 
 import ipdb
 
 NINDEL=1
@@ -503,7 +503,28 @@ class Model:
         # string
         next_unused_chain = next(e for e in contig_map.chain_order if e not in all_chains)
 
-        prot_ijvis_letters = self.assign_chunk_letters(contig_map.hal_idx0)
+
+        ix =[]
+        offset = 0; cur_chain = 'A'
+        for i,(chain,pdbix) in enumerate(contig_map.hal):
+            if chain != cur_chain:
+                offset += 200
+                cur_chain = chain
+            ix.append(pdbix+offset)
+
+        # prot_ijvis_letters = self.assign_chunk_letters(contig_map.hal_idx0)
+        hal_idx0_chains = [c for c, _ in contig_map.hal]#[contig_map.hal_idx0]
+        hal_idx0_chains = np.array([hal_idx0_chains[i] for i in contig_map.hal_idx0])
+        hal_idx0 = np.array(contig_map.hal_idx0)
+        ijvis_ix = np.array(contig_map.rf)[hal_idx0]
+        for letter in set(hal_idx0_chains):
+            if letter == 'A':
+                continue
+            mask = hal_idx0_chains == letter
+            ijvis_ix[mask] += 200 
+
+        prot_ijvis_letters = self.assign_chunk_letters(ijvis_ix)
+
         if refine: 
             # find the original hal idx0  
             prot_ijvis_letters = self.assign_chunk_letters(indep.metadata['refinement']['complex_hal_idx0'])
@@ -552,7 +573,7 @@ class Model:
         sm_ijvis_letters = [next_ijvis_letter]*n_sm
         ijvis_letters = prot_ijvis_letters + sm_ijvis_letters
         o.metadata['ijvis_letters'] = ijvis_letters
-        
+
         chain_id = np.array([c for c, _ in contig_map.hal])
         L_mapped = len(contig_map.hal)
         n_prot   = L_mapped - n_sm
@@ -606,13 +627,7 @@ class Model:
         o.chirals[...,:-1] = torch.tensor(hal_by_ref(o.chirals[...,:-1]))
 
 
-        ix =[]
-        offset = 0; cur_chain = 'A'
-        for i,(chain,pdbix) in enumerate(contig_map.hal):
-            if chain != cur_chain:
-                offset += 200
-                cur_chain = chain
-            ix.append(pdbix+offset)
+        
         # o.idx = torch.tensor([i for _, i in contig_map.hal])
         o.idx = torch.tensor(ix)
 

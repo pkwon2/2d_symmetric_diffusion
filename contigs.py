@@ -2,6 +2,7 @@ import sys
 import numpy as np 
 import random
 from icecream import ic
+import pprint 
 class ContigMap():
     '''
     New class for doing mapping.
@@ -39,17 +40,24 @@ class ContigMap():
             #using default contig generation, which outputs in rosetta-like format
             self.contigs=contigs
             self.contig_atoms=contig_atoms
+
             self.sampled_mask,self.contig_length,self.n_inpaint_chains = self.get_sampled_mask()
+
             self.receptor_chain = self.chain_order[self.n_inpaint_chains]
+
             self.receptor, self.receptor_hal, self.receptor_rf, self.inpaint, self.inpaint_hal, self.inpaint_rf= self.expand_sampled_mask()
+
+
             self.ref = self.inpaint + self.receptor
             self.hal = self.inpaint_hal + self.receptor_hal
             self.rf = self.inpaint_rf + self.receptor_rf   
+
         else:
             #specifying precise mappings
             self.ref=ref_idx
             self.hal=hal_idx
             self.rf = rf_idx
+
         self.mask_1d = [False if i == ('_','_') else True for i in self.ref]
         #take care of sequence and structure masking
         if self.inpaint_seq_tensor is None:
@@ -67,8 +75,11 @@ class ContigMap():
                 self.inpaint_str = np.array([True if i != ('_','_') else False for i in self.ref])
         else:
             self.inpaint_str = self.inpaint_str_tensor        
+
         #get 0-indexed input/output (for trb file)
         self.ref_idx0,self.hal_idx0, self.ref_idx0_inpaint, self.hal_idx0_inpaint, self.ref_idx0_receptor, self.hal_idx0_receptor=self.get_idx0()
+
+
         self.con_ref_pdb_idx=[i for i in self.ref if i != ('_','_')] 
 
     def get_sampled_mask(self):
@@ -138,14 +149,18 @@ class ContigMap():
         inpaint_chain_break = []
         for con in self.sampled_mask:
             if (all([i[0].isalpha() for i in con.split(",")[:-1]]) and con.split(",")[-1] == '0') or self.topo is True:
-                #receptor chain
+                #receptor chain 
+                inpaint_chain_idx += 1
+
                 subcons = con.split(",")[:-1]
                 assert all([i[0] == subcons[0][0] for i in subcons]), "If specifying fragmented receptor in a single block of the contig string, they MUST derive from the same chain"
                 assert all(int(subcons[i].split("-")[0][1:]) < int(subcons[i+1].split("-")[0][1:]) for i in range(len(subcons)-1)), "If specifying multiple fragments from the same chain, pdb indices must be in ascending order!"
                 for idx, subcon in enumerate(subcons):
                     ref_to_add = [(subcon[0], i) for i in np.arange(int(subcon.split("-")[0][1:]),int(subcon.split("-")[1])+1)]
                     receptor.extend(ref_to_add)
-                    receptor_hal.extend([(self.receptor_chain,i) for i in np.arange(receptor_idx, receptor_idx+len(ref_to_add))])
+                    # receptor_hal.extend([(self.receptor_chain,i) for i in np.arange(receptor_idx, receptor_idx+len(ref_to_add))])
+                    receptor_hal.extend([(chain_order[inpaint_chain_idx],i) for i in np.arange(receptor_idx, receptor_idx+len(ref_to_add))])
+
                     receptor_idx += len(ref_to_add)
                     if idx != len(subcons)-1:
                         idx_jump = int(subcons[idx+1].split("-")[0][1:]) - int(subcon.split("-")[1]) -1 
@@ -179,7 +194,8 @@ class ContigMap():
             inpaint_rf[ch_break[0]:] += ch_break[1]
         for ch_break in receptor_chain_break[:-1]:
             receptor_rf[ch_break[0]:] += ch_break[1]
-    
+
+
         return receptor, receptor_hal, receptor_rf.tolist(), inpaint, inpaint_hal, inpaint_rf.tolist()
 
     def get_inpaint_seq_str(self, inpaint_s):
