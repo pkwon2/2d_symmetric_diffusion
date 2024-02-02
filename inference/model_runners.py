@@ -55,7 +55,7 @@ from model_input_logger import pickle_function_call
 TOR_INDICES  = util.torsion_indices
 TOR_CAN_FLIP = util.torsion_can_flip
 REF_ANGLES   = util.reference_angles
-#import ipdb
+import ipdb
 class Sampler:
 
     def __init__(self, conf: DictConfig, preloaded_ckpts={}, prebuilt_models={}):
@@ -1227,12 +1227,15 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat, supplied_full_c
 
     # make 1D array designating which chunks are motif
     is_motif = torch.zeros(L)
+    #ipdb.set_trace()
     is_motif[con_hal_idx0_full] = 1 
-    # breaks2 = find_true_chunks_indices(is_motif)
-
-    breaks2 = find_contiguous_regions(ij_vis_letters)
-    breaks2 = [(con_hal_idx0_full[breaks2[i][0]], con_hal_idx0_full[breaks2[i][1]-1]) for i in range(len(breaks2))]
-
+    #ipdb.set_trace()
+    if ij_vis_letters is None:
+        breaks2 = find_true_chunks_indices(is_motif)
+    else:
+        breaks2 = find_contiguous_regions(ij_vis_letters)
+        breaks2 = [(con_hal_idx0_full[breaks2[i][0]], con_hal_idx0_full[breaks2[i][1]-1]) for i in range(len(breaks2))]
+    #ipdb.set_trace()
     # fill in 2d mask
     for i in range(len(breaks2)):
         for j in range(len(breaks2)):
@@ -1315,12 +1318,15 @@ class NRBStyleSelfCond(Sampler):
 
 
         con1 = torch.from_numpy( self.contig_map.get_mappings()['con_hal_idx0'] )
-        con2 = torch.from_numpy( self.contig_map.get_mappings().get('complex_con_hal_idx0', np.array([0])) )
-        if len(con1) > len(con2):
+        if self.contig_map.get_mappings().get('complex_con_hal_idx0') is not None:
+            con2 = torch.from_numpy( self.contig_map.get_mappings().get('complex_con_hal_idx0', np.array([0])) )
+        
+            if len(con1) > len(con2):
+                con_hal_idx0 = con1
+            else: 
+                con_hal_idx0 = con2
+        else:
             con_hal_idx0 = con1
-        else: 
-            con_hal_idx0 = con2
-
         # Assume that SM input will always be motif!! 
         if indep.is_sm.any():
             print('Detected small molecule in input - assuming it is a motif chunk.')
@@ -1334,8 +1340,10 @@ class NRBStyleSelfCond(Sampler):
         if refine: 
             # we can rely on src_con_hal to tell us where in THIS hal the motif goes 
             src_con_hal_idx0 = torch.from_numpy( ref_dict['con_hal_idx0'] )
-            if len(ref_dict['complex_hal_idx0']) > len(src_con_hal_idx0): 
-                src_con_hal_idx0 = torch.from_numpy( ref_dict['complex_hal_idx0'] )
+            #ipdb.set_trace()
+            if ref_dict['complex_hal_idx0'] is not None:
+                if len(ref_dict['complex_hal_idx0']) > len(src_con_hal_idx0): 
+                    src_con_hal_idx0 = torch.from_numpy( ref_dict['complex_hal_idx0'] )
          
             # src_con_ref_idx0 = torch.from_numpy( ref_dict['src_con_ref_idx0'] )
             
@@ -1400,7 +1408,12 @@ class NRBStyleSelfCond(Sampler):
                 assert ij_visible is not None, '3 template + motif_only_2d requires description of motif pairwise visibility'
                 ij_visible = ij_visible.split('-') # e.g., [abc,de,df,...]
                 ij_visible_int = [tuple([abet2num[a] for a in s]) for s in ij_visible]
-
+                
+                #ipdb.set_trace()
+                if not(indep.metadata):# empty
+                    indep.metadata['ijvis_letters'] = None
+                if 'ijvis_letters' not in indep.metadata.keys():
+                    indep.metadata['ijvis_letters'] = None
                 mask_t2d, _ = get_repeat_t2d_mask(L, 
                                                   con_hal_idx0, 
                                                   ij_visible_int, 
@@ -1410,12 +1423,13 @@ class NRBStyleSelfCond(Sampler):
             
             else:
                 # repeat/symmetric case
-                assert not refine, 'refine not yet implemented for symmetry/repeat' 
+                assert not refine, 'refine not yet implemented for symmetry/repeat' #LT actually it might work 
                 assert type(self._conf.inference.n_repeats) is int        # must be present 
                 is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig  # should be appropriate length 
 
 
                 is_motif = is_protein_motif.clone() | indep.is_sm # Assumes any small molecule is a motif chunk
+                #ipdb.set_trace()
 
                 if is_motif.sum() == len(con_hal_idx0):
                     supplied_full_contig = True
@@ -1429,6 +1443,12 @@ class NRBStyleSelfCond(Sampler):
                 ### t2d_is_revealed ###
                 n_repeat = self._conf.inference.n_repeats
                 L = len(is_protein_motif)
+                #ipdb.set_trace()
+                if not(indep.metadata):# empty
+                    indep.metadata['ijvis_letters'] = None
+                if 'ijvis_letters' not in indep.metadata.keys():
+                    indep.metadata['ijvis_letters'] = None
+
                 mask_t2d = parse_ij_get_repeat_mask(self._conf.inference.ij_visible, 
                                                     L, 
                                                     n_repeat, 
@@ -1551,7 +1571,7 @@ class NRBStyleSelfCond(Sampler):
         # print('LENGTH OF IDX_PDB:', len(idx_pdb))
                 #print('idx_pdb, bidx:' , idx_pdb, bidx)
                 print('self.chain_idx:', self.chain_idx)
-
+        #ipdb.set_trace()
         if not self.inf_conf.subsymm_t1d_perfect: 
             # all AA that are diffused (according to contigs) have intermediate confidences
             # even if they are templated in T2D 
@@ -1573,7 +1593,7 @@ class NRBStyleSelfCond(Sampler):
                                             threetemplate,
                                             is_protein_motif=is_protein_motif, 
                                             t2d_is_revealed=t2d_is_revealed)
-
+        #ipdb.set_trace()
         rf2aa.tensor_util.to_device(rfi, self.device)
         seq_init = torch.nn.functional.one_hot(indep.seq, num_classes=rf2aa.chemical.NAATOKENS).to(self.device).float()
         seq_t    = torch.clone(seq_init)
@@ -1734,7 +1754,7 @@ class NRBStyleSelfCond(Sampler):
                     N_cycle = self.inf_conf.refine_recycles
                 else: 
                     N_cycle = 1
-
+                #ipdb.set_trace()
                 with torch.cuda.amp.autocast(True):
                     rfo = self.model_adaptor.forward(rfi, N_cycle=N_cycle, return_infer=True, **kwargs)
                 print('********* SUCCESSFULL MODEL FORWARD *******')

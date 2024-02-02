@@ -46,7 +46,7 @@ import aa_model
 import util
 from icecream import ic 
 import json 
-
+import ipdb
 # ic.configureOutput(includeContext=True)
 
 def make_deterministic(seed=0):
@@ -319,13 +319,13 @@ def sample_one(sampler, simple_logging=False):
                 print('Breaking loop because doing refinement')
                 # have sequence of the native motif as the final sequence in the pdb, all else ala 
                 seq_out = torch.zeros_like(seq_t).long() # (L,80)
-                
+                #ipdb.set_trace()
                 con_ref = indep.metadata['refinement']['con_ref_idx0']
                 con_hal = indep.metadata['refinement']['con_hal_idx0']
-
-                if len(indep.metadata['refinement']['complex_ref_idx0']) > len(con_ref):
-                    con_ref = indep.metadata['refinement']['complex_ref_idx0']
-                    con_hal = indep.metadata['refinement']['complex_hal_idx0']
+                if indep.metadata['refinement']['complex_ref_idx0'] is not None:
+                    if len(indep.metadata['refinement']['complex_ref_idx0']) > len(con_ref):
+                        con_ref = indep.metadata['refinement']['complex_ref_idx0']
+                        con_hal = indep.metadata['refinement']['complex_hal_idx0']
 
 
                 # if there was a protein motif, align on the motif to native (BB)

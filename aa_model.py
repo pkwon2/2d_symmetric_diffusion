@@ -27,7 +27,7 @@ from rf2aa.util_module import XYZConverter
 import rotation_conversions
 import string 
 from kinematics import th_kabsch
-import pdb 
+#import pdb 
 import ipdb
 
 NINDEL=1
@@ -412,8 +412,10 @@ class Model:
             ref_dict['ij_visible'] = ij_visible
             ref_dict['con_ref_idx0'] = data['con_ref_idx0']
             ref_dict['con_hal_idx0'] = data['con_hal_idx0']
-            ref_dict['complex_ref_idx0'] = data['complex_con_ref_idx0']
-            ref_dict['complex_hal_idx0'] = data['complex_con_hal_idx0']
+            #ipdb.set_trace()
+            #if 
+            ref_dict['complex_ref_idx0'] = None if 'complex_con_ref_idx0' not in data.keys() else data['complex_con_ref_idx0']
+            ref_dict['complex_hal_idx0'] = None if 'complex_con_hal_idx0' not in data.keys() else data['complex_con_hal_idx0']
             ref_dict['ligand'] = conf['inference']['ligand']
             ref_dict['src_trb'] = trb
             ref_dict['terminus_type'] = data['indep']['terminus_type']
@@ -448,7 +450,7 @@ class Model:
 
             metadata['refinement'] = ref_dict
 
-
+        #ipdb.set_trace()
         indep = Indep(
             seq,
             seq2,
@@ -504,33 +506,18 @@ class Model:
         next_unused_chain = next(e for e in contig_map.chain_order if e not in all_chains)
 
 
-        ix =[]
-        offset = 0; cur_chain = 'A'
-        for i,(chain,pdbix) in enumerate(contig_map.hal):
-            if chain != cur_chain:
-                offset += 200
-                cur_chain = chain
-            ix.append(pdbix+offset)
-
-        # prot_ijvis_letters = self.assign_chunk_letters(contig_map.hal_idx0)
-        hal_idx0_chains = [c for c, _ in contig_map.hal]#[contig_map.hal_idx0]
-        hal_idx0_chains = np.array([hal_idx0_chains[i] for i in contig_map.hal_idx0])
-        hal_idx0 = np.array(contig_map.hal_idx0)
-        ijvis_ix = np.array(contig_map.rf)[hal_idx0]
-        for letter in set(hal_idx0_chains):
-            if letter == 'A':
-                continue
-            mask = hal_idx0_chains == letter
-            ijvis_ix[mask] += 200 
-
-        prot_ijvis_letters = self.assign_chunk_letters(ijvis_ix)
-
+        #ipdb.set_trace()
+        is_motif = (contig_map.hal_idx0 != [])
+        #ipdb.set_trace()
         if refine: 
-            # find the original hal idx0  
-            prot_ijvis_letters = self.assign_chunk_letters(indep.metadata['refinement']['complex_hal_idx0'])
-
-        used_ijvis_letters = set(prot_ijvis_letters)
-        next_ijvis_letter  = next(e for e in string.ascii_lowercase if e not in used_ijvis_letters)
+            is_motif = (indep.metadata['refinement']['complex_hal_idx0'] is not None)
+            # find the original hal idx0 
+            #is_motif_refine = (indep.metadata['refinement']['complex_hal_idx0'] != [])
+            #ipdb.set_trace()
+            if is_motif:#indep.metadata['refinement']['complex_hal_idx0'] != []:
+                prot_ijvis_letters = self.assign_chunk_letters(indep.metadata['refinement']['complex_hal_idx0'])
+                used_ijvis_letters = set(prot_ijvis_letters)
+                next_ijvis_letter  = next(e for e in string.ascii_lowercase if e not in used_ijvis_letters)
 
 
         # number of small molecule atoms
@@ -544,7 +531,7 @@ class Model:
         n_protein_hal       = len(contig_map.hal)
         contig_map.hal_idx0 = np.concatenate((contig_map.hal_idx0, np.arange(n_protein_hal, n_protein_hal+n_sm)))
 
-        max_hal_idx = max(i for _, i  in contig_map.hal)
+        
         all_chains = list(sorted(all_chains))
         #ipdb.set_trace()
 
@@ -553,32 +540,85 @@ class Model:
             curr_chain_idx = 0
             break_idxs = [int(i) for i in str(break_idx).split("-")]
             bidx = break_idxs[k]
+            offset = 0
             for resi in contig_map.hal:
-                # curr_chain = resi[0]
-                # curr_chain_idx = all_chains.index(curr_chain)
-                contig_map.hal[resi[1]-1] = (all_chains[curr_chain_idx], resi[1])
+                contig_map.hal[resi[1]-1] = (all_chains[curr_chain_idx], resi[1]+offset)
                 if int(resi[1]) == bidx: #start a new chain
-                    #ipdb.set_trace()
+                    contig_map.hal[resi[1]-1] = (all_chains[curr_chain_idx], resi[1]+offset)
                     curr_chain_idx += 1
-                    #curr_chain = all_chains[curr_chain_idx]
-                    contig_map.hal[resi[1]-1] = (all_chains[curr_chain_idx], resi[1])
+                    offset += 200
                     if k < len(break_idxs)-1:
                         k += 1
                         bidx = break_idxs[k]
-
+            #ipdb.set_trace()
+        max_hal_idx = max(i for _, i  in contig_map.hal)
+        #ipdb.set_trace()
         # NOTE - this makes all small molecules in the same chain
         print(f'WARNING: putting all small molecules in the same chain. Chain: {next_unused_chain}')
         contig_map.hal.extend(zip([next_unused_chain]*n_sm, range(max_hal_idx+200,max_hal_idx+200+n_sm)))
-
-        sm_ijvis_letters = [next_ijvis_letter]*n_sm
-        ijvis_letters = prot_ijvis_letters + sm_ijvis_letters
-        o.metadata['ijvis_letters'] = ijvis_letters
+        # if is_motif:
+        #     sm_ijvis_letters = [next_ijvis_letter]*n_sm
+        #     ijvis_letters = prot_ijvis_letters + sm_ijvis_letters
+        #     o.metadata['ijvis_letters'] = ijvis_letters
 
         chain_id = np.array([c for c, _ in contig_map.hal])
         L_mapped = len(contig_map.hal)
         n_prot   = L_mapped - n_sm
         L_in, NATOMS, _ = indep.xyz.shape
+        
 
+        if is_motif:
+            #ipdb.set_trace()
+            ix =[]  
+            offset = 0; cur_chain = 'A'
+            for i,(chain,pdbix) in enumerate(contig_map.hal):
+                if chain != cur_chain:
+                    offset += 200
+                    cur_chain = chain
+                ix.append(pdbix+offset)
+
+            o.idx = torch.tensor(ix)
+            #ipdb.set_trace()
+            hal_idx0_chains = [c for c, _ in contig_map.hal]#[contig_map.hal_idx0]
+            hal_idx0_chains = np.array([hal_idx0_chains[i] for i in contig_map.hal_idx0])
+            hal_idx0 = np.array(contig_map.hal_idx0)
+            ijvis_ix = np.array(contig_map.rf)[hal_idx0]
+            for letter in set(hal_idx0_chains):
+                if letter == 'A':
+                    continue
+                mask = hal_idx0_chains == letter
+                ijvis_ix[mask] += 200 
+
+            prot_ijvis_letters = self.assign_chunk_letters(ijvis_ix)
+            o.metadata['ijvis_letters'] = prot_ijvis_letters
+
+        else:
+            o.idx = torch.tensor([i for _, i in contig_map.hal])
+
+        #ipdb.set_trace()
+        if self.conf.inference.helical_breaks: # helical symmetry, break repeat at asu boundary
+            Nchain = o.xyz.shape[0] // self.conf.model.repeat_length 
+            ix = []
+            offset = 0
+            start = 0
+            for i in range(Nchain):
+                ix.append(torch.arange(start, start+o.xyz.shape[0] // Nchain) + offset)
+                start = start+o.xyz.shape[0] // Nchain
+                offset += 200
+            o.idx = torch.cat(ix)
+
+            # # prot_ijvis_letters = self.assign_chunk_letters(contig_map.hal_idx0)
+            # hal_idx0_chains = [c for c, _ in contig_map.hal]#[contig_map.hal_idx0]
+            # hal_idx0_chains = np.array([hal_idx0_chains[i] for i in contig_map.hal_idx0])
+            # hal_idx0 = np.array(contig_map.hal_idx0)
+            # ijvis_ix = np.array(contig_map.rf)[hal_idx0]
+            # for letter in set(hal_idx0_chains):
+            #     if letter == 'A':
+            #         continue
+            #     mask = hal_idx0_chains == letter
+            #     ijvis_ix[mask] += 200 
+
+            # prot_ijvis_letters = self.assign_chunk_letters(ijvis_ix)
         # initialize xyz for trajectory - slice in protein atoms from original indep
         if not partial_T and not refine:
             o.xyz = torch.full((L_mapped, NATOMS, 3), np.nan)
@@ -627,20 +667,7 @@ class Model:
         o.chirals[...,:-1] = torch.tensor(hal_by_ref(o.chirals[...,:-1]))
 
 
-        
-        # o.idx = torch.tensor([i for _, i in contig_map.hal])
-        o.idx = torch.tensor(ix)
 
-        if self.conf.inference.helical_breaks: # helical symmetry, break repeat at asu boundary
-            Nchain = o.xyz.shape[0] // self.conf.model.repeat_length 
-            ix = []
-            offset = 0
-            start = 0
-            for i in range(Nchain):
-                ix.append(torch.arange(start, start+o.xyz.shape[0] // Nchain) + offset)
-                start = start+o.xyz.shape[0] // Nchain
-                offset += 200
-            o.idx = torch.cat(ix)
 
         o.terminus_type = torch.zeros(L_mapped)
         o.terminus_type[0] = N_TERMINUS
@@ -714,9 +741,12 @@ class Model:
             refine=True
             src_con_hal_idx0 = torch.from_numpy( ref_dict['con_hal_idx0'] )
             src_con_ref_idx0 = torch.from_numpy( ref_dict['con_ref_idx0'] )
-            if len(ref_dict['complex_hal_idx0']) > len(src_con_hal_idx0): 
-                src_con_hal_idx0 = torch.from_numpy( ref_dict['complex_hal_idx0'] )
-                src_con_ref_idx0 = torch.from_numpy( ref_dict['complex_ref_idx0'] )
+            #ipdb.set_trace()
+            if 'complex_hal_idx0' in ref_dict.keys() and ref_dict['complex_hal_idx0'] is not None:
+                #ref_dict['complex_hal_idx0'] = torch([])
+                if len(ref_dict['complex_hal_idx0']) > len(src_con_hal_idx0): 
+                    src_con_hal_idx0 = torch.from_numpy( ref_dict['complex_hal_idx0'] )
+                    src_con_ref_idx0 = torch.from_numpy( ref_dict['complex_ref_idx0'] )
 
             # replace the sequence w/ sequence from original motif
             if len(src_con_hal_idx0) > 0:
