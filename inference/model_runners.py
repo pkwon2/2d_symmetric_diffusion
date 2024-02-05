@@ -55,7 +55,7 @@ from model_input_logger import pickle_function_call
 TOR_INDICES  = util.torsion_indices
 TOR_CAN_FLIP = util.torsion_can_flip
 REF_ANGLES   = util.reference_angles
-import ipdb
+
 class Sampler:
 
     def __init__(self, conf: DictConfig, preloaded_ckpts={}, prebuilt_models={}):

@@ -28,7 +28,7 @@ import rotation_conversions
 import string 
 from kinematics import th_kabsch
 #import pdb 
-import ipdb
+#import ipdb
 
 NINDEL=1
 NTERMINUS=2
@@ -500,11 +500,9 @@ class Model:
         #print(all_chains)
         # Not yet implemented due to index shifting
         # assert_that(len(all_chains)).is_equal_to(1)
-        print(f'WARNING: only 1 chain supported for now. Found {len(all_chains)} chains: {all_chains}')
+        #print(f'WARNING: only 1 chain supported for now. Found {len(all_chains)} chains: {all_chains}')
         #ipdb.set_trace()
-        # string
         next_unused_chain = next(e for e in contig_map.chain_order if e not in all_chains)
-
 
         #ipdb.set_trace()
         is_motif = (contig_map.hal_idx0 != [])
@@ -546,6 +544,7 @@ class Model:
                 if int(resi[1]) == bidx: #start a new chain
                     contig_map.hal[resi[1]-1] = (all_chains[curr_chain_idx], resi[1]+offset)
                     curr_chain_idx += 1
+                    #ipdb.set_trace()
                     offset += 200
                     if k < len(break_idxs)-1:
                         k += 1
