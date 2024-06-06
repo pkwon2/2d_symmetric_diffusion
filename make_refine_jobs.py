@@ -14,7 +14,8 @@ def make_refine_jobs(outdir,
     Creates refinement jobs for a folder of outputs
     """
 
-    pdbs = glob.glob(outdir+'/*.pdb')
+    pdbs = [i for i in glob.glob(outdir+'/*.pdb') if 'refined' not in i] # LA do not refine the refine results
+    print(len(pdbs))
 
     BASE_INF_DICT = {'model_runner':'NRBStyleSelfCond',
                                 'num_designs':n_refine,

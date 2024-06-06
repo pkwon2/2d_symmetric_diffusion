@@ -27,8 +27,6 @@ from rf2aa.util_module import XYZConverter
 import rotation_conversions
 import string 
 from kinematics import th_kabsch
-#import pdb 
-#import ipdb
 
 NINDEL=1
 NTERMINUS=2
@@ -414,6 +412,9 @@ class Model:
             ref_dict['con_hal_idx0'] = data['con_hal_idx0']
             #ipdb.set_trace()
             #if 
+            # ref_dict['complex_ref_idx0'] = data['complex_con_ref_idx0']
+            # ref_dict['complex_hal_idx0'] = data['complex_con_hal_idx0']
+
             ref_dict['complex_ref_idx0'] = None if 'complex_con_ref_idx0' not in data.keys() else data['complex_con_ref_idx0']
             ref_dict['complex_hal_idx0'] = None if 'complex_con_hal_idx0' not in data.keys() else data['complex_con_hal_idx0']
             ref_dict['ligand'] = conf['inference']['ligand']
@@ -498,6 +499,7 @@ class Model:
             for i in range(num_break):
                 all_chains.add(next(add_c for add_c in contig_map.chain_order if add_c not in all_chains))
         #print(all_chains)
+        ic(all_chains)
         # Not yet implemented due to index shifting
         # assert_that(len(all_chains)).is_equal_to(1)
         #print(f'WARNING: only 1 chain supported for now. Found {len(all_chains)} chains: {all_chains}')
@@ -506,6 +508,7 @@ class Model:
 
         #ipdb.set_trace()
         is_motif = (contig_map.hal_idx0 != [])
+
         #ipdb.set_trace()
         if refine: 
             is_motif = (indep.metadata['refinement']['complex_hal_idx0'] is not None)
@@ -520,18 +523,23 @@ class Model:
 
         # number of small molecule atoms
         n_sm = indep.is_sm.sum()
+        ic(n_sm) #LA: not count H
 
         # list of indices of small molecule atoms - 0 indexed
         is_sm_idx0 = torch.nonzero(indep.is_sm, as_tuple=True)[0].tolist()
         contig_map.ref_idx0.extend(is_sm_idx0)
+        ic(is_sm_idx0)
         
 
         n_protein_hal       = len(contig_map.hal)
+        ic(contig_map.hal)
         contig_map.hal_idx0 = np.concatenate((contig_map.hal_idx0, np.arange(n_protein_hal, n_protein_hal+n_sm)))
+        ic(contig_map.hal_idx0)
 
         
         all_chains = list(sorted(all_chains))
-        #ipdb.set_trace()
+        ic(all_chains)
+        # ipdb.set_trace()
 
         if break_idx is not None and multi:
             k = 0
@@ -550,11 +558,15 @@ class Model:
                         k += 1
                         bidx = break_idxs[k]
             #ipdb.set_trace()
+        ic(contig_map.hal)
         max_hal_idx = max(i for _, i  in contig_map.hal)
+        ic(max_hal_idx)
+        ic(contig_map.hal)
         #ipdb.set_trace()
         # NOTE - this makes all small molecules in the same chain
         print(f'WARNING: putting all small molecules in the same chain. Chain: {next_unused_chain}')
         contig_map.hal.extend(zip([next_unused_chain]*n_sm, range(max_hal_idx+200,max_hal_idx+200+n_sm)))
+       
         # if is_motif:
         #     sm_ijvis_letters = [next_ijvis_letter]*n_sm
         #     ijvis_letters = prot_ijvis_letters + sm_ijvis_letters
@@ -565,34 +577,39 @@ class Model:
         n_prot   = L_mapped - n_sm
         L_in, NATOMS, _ = indep.xyz.shape
         
+        # LA: here is where need to be remove to restore partial diffusion
+        # if is_motif:
+        #     #ipdb.set_trace()
+        #     ix =[]  
+        #     offset = 0; cur_chain = 'A'
+        #     for i,(chain,pdbix) in enumerate(contig_map.hal):
+        #         if chain != cur_chain:
+        #             offset += 200
+        #             cur_chain = chain
+        #         ix.append(pdbix+offset)
 
-        if is_motif:
-            #ipdb.set_trace()
-            ix =[]  
-            offset = 0; cur_chain = 'A'
-            for i,(chain,pdbix) in enumerate(contig_map.hal):
-                if chain != cur_chain:
-                    offset += 200
-                    cur_chain = chain
-                ix.append(pdbix+offset)
+        #     o.idx = torch.tensor(ix)
+        #     #ipdb.set_trace()
+        #     ic(contig_map.hal) #(chain,num), chain A + sm
+        #     ic(contig_map.hal_idx0) # chain A+sm
+        #     ic(contig_map.rf) # chain A 
+        #     hal_idx0_chains = [c for c, _ in contig_map.hal]#[contig_map.hal_idx0]
+        #     ic(hal_idx0_chains)
+        #     hal_idx0_chains = np.array([hal_idx0_chains[i] for i in contig_map.hal_idx0])
+        #     hal_idx0 = np.array(contig_map.hal_idx0)
+        #     ijvis_ix = np.array(contig_map.rf)[hal_idx0]
+        #     for letter in set(hal_idx0_chains):
+        #         if letter == 'A':
+        #             continue
+        #         mask = hal_idx0_chains == letter
+        #         ijvis_ix[mask] += 200 
 
-            o.idx = torch.tensor(ix)
-            #ipdb.set_trace()
-            hal_idx0_chains = [c for c, _ in contig_map.hal]#[contig_map.hal_idx0]
-            hal_idx0_chains = np.array([hal_idx0_chains[i] for i in contig_map.hal_idx0])
-            hal_idx0 = np.array(contig_map.hal_idx0)
-            ijvis_ix = np.array(contig_map.rf)[hal_idx0]
-            for letter in set(hal_idx0_chains):
-                if letter == 'A':
-                    continue
-                mask = hal_idx0_chains == letter
-                ijvis_ix[mask] += 200 
+        #     prot_ijvis_letters = self.assign_chunk_letters(ijvis_ix)
+        #     o.metadata['ijvis_letters'] = prot_ijvis_letters
 
-            prot_ijvis_letters = self.assign_chunk_letters(ijvis_ix)
-            o.metadata['ijvis_letters'] = prot_ijvis_letters
-
-        else:
-            o.idx = torch.tensor([i for _, i in contig_map.hal])
+        # else:
+        # LA test remove
+        o.idx = torch.tensor([i for _, i in contig_map.hal])
 
         #ipdb.set_trace()
         if self.conf.inference.helical_breaks: # helical symmetry, break repeat at asu boundary
@@ -1123,6 +1140,7 @@ def pad_dim(x, dim, new_l):
 
 def write_traj(path, xyz_stack, seq, bond_feats, **kwargs):
     xyz23 = pad_dim(xyz_stack, 2, 23)
+    
     with open(path, 'w') as fh:
         for i, xyz in enumerate(xyz23):
             rf2aa.util.writepdb_file(fh, xyz, seq, bond_feats=bond_feats[None], modelnum=i, **kwargs)

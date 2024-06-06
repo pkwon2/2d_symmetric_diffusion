@@ -13,6 +13,7 @@ class ContigMap():
     '''
     def __init__(self, parsed_pdb, contigs=None, contig_atoms=None, inpaint_seq=None, inpaint_str=None, length=None, ref_idx=None, hal_idx=None, idx_rf=None, inpaint_seq_tensor=None, inpaint_str_tensor=None, topo=False):
         #sanity checks
+        ic(contigs)
         if contigs is None and ref_idx is None:
             sys.exit("Must either specify a contig string or precise mapping")
         if idx_rf is not None or hal_idx is not None or ref_idx is not None:
@@ -46,17 +47,20 @@ class ContigMap():
             self.receptor_chain = self.chain_order[self.n_inpaint_chains]
 
             self.receptor, self.receptor_hal, self.receptor_rf, self.inpaint, self.inpaint_hal, self.inpaint_rf= self.expand_sampled_mask()
+            ic(self.receptor, self.receptor_hal, self.receptor_rf, self.inpaint, self.inpaint_hal, self.inpaint_rf)
 
 
             self.ref = self.inpaint + self.receptor
             self.hal = self.inpaint_hal + self.receptor_hal
             self.rf = self.inpaint_rf + self.receptor_rf   
+            ic(self.rf)
 
         else:
             #specifying precise mappings
             self.ref=ref_idx
             self.hal=hal_idx
-            self.rf = rf_idx
+            # self.rf = rf_idx # this is probably a typo, should be idx_rf, but nothing is bothered.
+            self.rf = idx_rf
 
         self.mask_1d = [False if i == ('_','_') else True for i in self.ref]
         #take care of sequence and structure masking
@@ -147,12 +151,15 @@ class ContigMap():
         inpaint_chain_idx=-1
         receptor_chain_break=[]
         inpaint_chain_break = []
+        ic(self.sampled_mask)
         for con in self.sampled_mask:
+            ic([i[0].isalpha() for i in con.split(",")[:-1]])
             if (all([i[0].isalpha() for i in con.split(",")[:-1]]) and con.split(",")[-1] == '0') or self.topo is True:
                 #receptor chain 
                 inpaint_chain_idx += 1
 
                 subcons = con.split(",")[:-1]
+                ic(subcons)
                 assert all([i[0] == subcons[0][0] for i in subcons]), "If specifying fragmented receptor in a single block of the contig string, they MUST derive from the same chain"
                 assert all(int(subcons[i].split("-")[0][1:]) < int(subcons[i+1].split("-")[0][1:]) for i in range(len(subcons)-1)), "If specifying multiple fragments from the same chain, pdb indices must be in ascending order!"
                 for idx, subcon in enumerate(subcons):
@@ -188,6 +195,7 @@ class ContigMap():
             receptor_hal = [(i[0], i[1] + inpaint_hal[-1][1]) for i in receptor_hal] #rosetta-like numbering
         #get rf indexes, with chain breaks
         inpaint_rf = np.arange(0,len(inpaint))
+        ic(receptor)
         receptor_rf = np.arange(len(inpaint)+200,len(inpaint)+len(receptor)+200)
         for ch_break in inpaint_chain_break[:-1]:
             receptor_rf[:] += 200

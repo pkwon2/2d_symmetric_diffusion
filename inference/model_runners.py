@@ -41,6 +41,7 @@ import os
 import matplotlib.pyplot as plt 
 from memory import mem_report
 
+
 REPORT_MEM=False
 
 import sys
@@ -614,6 +615,8 @@ class Sampler:
             xT = indep.xyz[:,:14,:]
             xt = torch.clone(xT) 
             indep.xyz = xt
+
+            # add logic here to get correct indep.xyz2 for motif
     
 
         # # now save again after diffusion 
@@ -1490,7 +1493,8 @@ class NRBStyleSelfCond(Sampler):
             tors_t_1: (L, ?) The updated torsion angles of the next  step.
             plddt: (L, 1) Predicted lDDT of x0.
         '''
-
+        motif_rms = 0 # LA initialization
+        
         twotemplate   = self.inf_conf.two_template
         threetemplate = self.inf_conf.three_template
         bidx = self.inf_conf.pseudocycle_break
@@ -1814,8 +1818,9 @@ class NRBStyleSelfCond(Sampler):
             px0,motif_rms = aa_model.align_on_motif(self.first_px0.float(), 
                                                     px0.float(), 
                                                     con_hal)
-            
+            ic(motif_rms)
             self._log.info(f'Motif RMSD relative to first prediction: {motif_rms}')
+
         else: 
             # nothing 
             pass
@@ -1950,7 +1955,8 @@ class NRBStyleSelfCond(Sampler):
             print('MEM REPORT END OF MODEL_RUNNERS.SAMPLE_STEP')
             mem_report()
 
-        return px0, x_t_1, seq_t_1, tors_t_1, None, rfo
+        # return px0, x_t_1, seq_t_1, tors_t_1, None, rfo # LA return the motif rmsd as well
+        return px0, x_t_1, seq_t_1, tors_t_1, motif_rms , rfo
 
 def sampler_selector(conf: DictConfig, preloaded_ckpts={}, preloaded_models={}):
     if conf.inference.model_runner == 'default':

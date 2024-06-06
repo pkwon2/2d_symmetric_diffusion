@@ -128,7 +128,15 @@ inference.motif_only_2d=True \
 preprocess.eye_frames=True \
 inference.supply_motif_seq=True \
 ```
+### new features
+#### stop at early steps
+Bcov found it useful to stop diffusion traj if protein complex interfaces are not formed well after certain steps, because the continous success will low rate anyway. We add the feature to stop the diffusion traj after `inference.check_rmsd_step` if `inference.contig_rmsd` is still larger than cutoff. LA find it useful when doing partial diffusion for binder/enzymes. LA does not recommend it for motif grafting, because you high chance need some terminal motif change to allow your key rotamers to be respected.
 
+#### examples
+`experiment1_enzyme_motif_grafting.sh`: command example for motif grafting
+`experiment2_free_diffuse_pseudocycle_sm.sh`: command example for pseudocycle diffusion
+`experiment3_enzyme_partial_diffusion.sh`: command example for enzyme partial diffusion
 
-
+note: currently, the last string cannot be contig, for example, you can do [\'A1-100,5,A199-200,1-1\'], but not [\'A1-100,5,A199-200\']. This is due to how the contig read function writes.
+note2: one key feature found to interfere with protein quality is `noise_scale_ca`, while scaffold diversity increases with large noise, protein quality drop as well. Recommended range [0-0.5], can test [0,0.01,0.1,0.2...0.5] for design
 
