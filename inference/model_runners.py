@@ -1230,15 +1230,12 @@ def get_repeat_t2d_mask(L, con_hal_idx0, ij_is_visible, nrepeat, supplied_full_c
 
     # make 1D array designating which chunks are motif
     is_motif = torch.zeros(L)
-    #ipdb.set_trace()
     is_motif[con_hal_idx0_full] = 1 
-    #ipdb.set_trace()
     if ij_vis_letters is None:
         breaks2 = find_true_chunks_indices(is_motif)
     else:
         breaks2 = find_contiguous_regions(ij_vis_letters)
         breaks2 = [(con_hal_idx0_full[breaks2[i][0]], con_hal_idx0_full[breaks2[i][1]-1]) for i in range(len(breaks2))]
-    #ipdb.set_trace()
     # fill in 2d mask
     for i in range(len(breaks2)):
         for j in range(len(breaks2)):
@@ -1266,7 +1263,7 @@ def parse_ij_get_repeat_mask(ij_visible,
     Helper function for getting repeat protein mask 2d info
     """
 
-    abet = 'abcdefghijklmnopqrstuvwxyz'
+    abet = 'abcdefghijklmnopqrstuvwxyz' + 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     abet = [a for a in abet]
     abet2num = {a:i for i,a in enumerate(abet)}
 
