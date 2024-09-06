@@ -44,10 +44,9 @@ import rf2aa.util
 from rf2aa.RoseTTAFoldModel import reset_model_attrs
 import aa_model
 import util
-from icecream import ic 
 import json 
-#import ipdb
-# ic.configureOutput(includeContext=True)
+import pdb as ipdb
+
 
 def make_deterministic(seed=0):
     torch.use_deterministic_algorithms(True)
@@ -124,7 +123,7 @@ def main(conf: HydraConfig) -> None:
             mini_overrides = get_overrides(json_arg)
             tmp_conf.inference.overrides = mini_overrides # HACK: to get overrides into assemble_config_from_chk
 
-            ic(tmp_conf)
+            # ic(tmp_conf)
 
             # DJ -  repeat/symm specific hack
             #       There are some arguments in conf that make their way into RF object attributes      
@@ -331,8 +330,6 @@ def sample_one(sampler, simple_logging=False):
                 #     assert not sm_missing_ca.any(), f'{t}:sm_missing_ca {sm_missing_ca}'
                 # except Exception as e:
                 #     print(e)
-                #     import ipdb
-                #     ipdb.set_trace()
                 px0_xyz_stack.append(px0)
                 denoised_xyz_stack.append(x_t)
                 seq_stack.append(seq_t)
@@ -561,13 +558,15 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
         #chain_Ls = [CHAINS, sm_mask.sum()]
         chain_Ls = CHAINS
     
-    print('CHAIN_LS:', chain_Ls)
+    #print('CHAIN_LS:', chain_Ls)
         
         
     # pX0 last step
     out = f'{out_prefix}.pdb'
 
     # compute chain/idx 
+    # diffused pdbs
+    ipdb.set_trace()
     aa_model.write_traj(out, 
                         denoised_xyz_stack[0:1], 
                         final_seq, 
@@ -595,7 +594,8 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
             rf2aa.util.writepdb_file(f, xyz_particle.cpu(), seq_particle.long(), chain_Ls=chain_Ls_symm)
 
     # trajectory pdbs
-    if not sampler.inf_conf.refine:
+    ipdb.set_trace()
+    if not sampler.inf_conf.refine and sampler.inf_conf.traj: #and traj
         traj_prefix = os.path.dirname(out_prefix)+'/traj/'+os.path.basename(out_prefix)
         os.makedirs(os.path.dirname(traj_prefix), exist_ok=True)
 
@@ -607,14 +607,14 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
         aa_model.write_traj(out, px0_xyz_stack, final_seq, indep.bond_feats, chain_Ls=chain_Ls)
         x0_traj_path = os.path.abspath(out)
 
-        # run metadata
-        sampler._conf.inference.input_pdb = os.path.abspath(sampler._conf.inference.input_pdb)
-        indep_out ={}
-        for k,v in dataclasses.asdict(indep).items():
-            if torch.is_tensor(v):
-                indep_out[k] = v.detach().cpu().numpy()
-            else:
-                indep_out[k] = v
+    # run metadata
+    sampler._conf.inference.input_pdb = os.path.abspath(sampler._conf.inference.input_pdb)
+    indep_out ={}
+    for k,v in dataclasses.asdict(indep).items():
+        if torch.is_tensor(v):
+            indep_out[k] = v.detach().cpu().numpy()
+        else:
+            indep_out[k] = v
 
     if not sampler.inf_conf.refine:
         trb = dict(
@@ -635,7 +635,7 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
     #     os.symlink(orig_trb, f'{out_prefix}.trb')
 
     log.info(f'design : {des_path}')
-    if not sampler.inf_conf.refine:
+    if not sampler.inf_conf.refine and sampler.inf_conf.traj:
         log.info(f'Xt traj: {xt_traj_path}')
         log.info(f'X0 traj: {x0_traj_path}')
 
