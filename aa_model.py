@@ -2,7 +2,6 @@ import torch
 import assertpy
 import torch.nn.functional as F
 import dataclasses
-from icecream import ic
 from assertpy import assert_that
 from rf2aa.chemical import NAATOKENS, MASKINDEX, NTOTAL, NHEAVYPROT
 import rf2aa.util
@@ -20,7 +19,6 @@ from rf2aa.chemical import MASKINDEX, seq2chars
 import util
 import inference.utils
 import networkx as nx
-import itertools
 import random
 from typing import Optional 
 from rf2aa.util_module import XYZConverter
@@ -498,23 +496,21 @@ class Model:
             num_break = len(str(break_idx).split("-"))
             for i in range(num_break):
                 all_chains.add(next(add_c for add_c in contig_map.chain_order if add_c not in all_chains))
-        #print(all_chains)
-        ic(all_chains)
+
         # Not yet implemented due to index shifting
         # assert_that(len(all_chains)).is_equal_to(1)
         #print(f'WARNING: only 1 chain supported for now. Found {len(all_chains)} chains: {all_chains}')
-        #ipdb.set_trace()
+
         next_unused_chain = next(e for e in contig_map.chain_order if e not in all_chains)
 
-        #ipdb.set_trace()
         is_motif = (contig_map.hal_idx0 != [])
 
-        #ipdb.set_trace()
+
         if refine: 
             is_motif = (indep.metadata['refinement']['complex_hal_idx0'] is not None)
             # find the original hal idx0 
             #is_motif_refine = (indep.metadata['refinement']['complex_hal_idx0'] != [])
-            #ipdb.set_trace()
+
             if is_motif:#indep.metadata['refinement']['complex_hal_idx0'] != []:
                 prot_ijvis_letters = self.assign_chunk_letters(indep.metadata['refinement']['complex_hal_idx0'])
                 used_ijvis_letters = set(prot_ijvis_letters)
@@ -523,23 +519,22 @@ class Model:
 
         # number of small molecule atoms
         n_sm = indep.is_sm.sum()
-        ic(n_sm) #LA: not count H
+
 
         # list of indices of small molecule atoms - 0 indexed
         is_sm_idx0 = torch.nonzero(indep.is_sm, as_tuple=True)[0].tolist()
         contig_map.ref_idx0.extend(is_sm_idx0)
-        ic(is_sm_idx0)
+
         
 
         n_protein_hal       = len(contig_map.hal)
-        ic(contig_map.hal)
+
         contig_map.hal_idx0 = np.concatenate((contig_map.hal_idx0, np.arange(n_protein_hal, n_protein_hal+n_sm)))
-        ic(contig_map.hal_idx0)
+
 
         
         all_chains = list(sorted(all_chains))
-        ic(all_chains)
-        # ipdb.set_trace()
+
 
         if break_idx is not None and multi:
             k = 0
@@ -557,12 +552,10 @@ class Model:
                     if k < len(break_idxs)-1:
                         k += 1
                         bidx = break_idxs[k]
-            #ipdb.set_trace()
-        ic(contig_map.hal)
+
         max_hal_idx = max(i for _, i  in contig_map.hal)
-        ic(max_hal_idx)
-        ic(contig_map.hal)
-        #ipdb.set_trace()
+
+
         # NOTE - this makes all small molecules in the same chain
         print(f'WARNING: putting all small molecules in the same chain. Chain: {next_unused_chain}')
         contig_map.hal.extend(zip([next_unused_chain]*n_sm, range(max_hal_idx+200,max_hal_idx+200+n_sm)))
@@ -666,7 +659,7 @@ class Model:
         n_prot_ref = L_in-n_sm
         o.bond_feats[n_prot:, n_prot:] = indep.bond_feats[n_prot_ref:, n_prot_ref:]
 
-        #ipdb.set_trace()
+ 
 
         if break_idx is not None and multi:
             break_idxs = [int(i) for i in str(break_idx).split("-")]
@@ -1171,7 +1164,7 @@ def adaptor_fix_bb_indep(out):
     xyz_t, mask_t, t1d, xyz_prev, mask_prev = set_ground_truth_template_feats(seq, true_crds, atom_mask)
 
     # our dataloaders return torch.zeros(L...) for atom frames and chirals when there are none, this updates it to use common shape 
-    ic(atom_frames)
+
     if torch.all(atom_frames == 0):
         atom_frames = torch.zeros((0,3,2))
     if torch.all(chirals == 0):
@@ -1211,8 +1204,8 @@ def pop_unoccupied(indep, atom_mask):
     assertpy.assert_that(len(indep.atom_frames)).is_equal_to(n_atoms)
 
     pop = rf2aa.util.get_prot_sm_mask(atom_mask, indep.seq)
-    ic(atom_mask.shape, indep.seq.shape, pop.shape)
-    ic(f'Removing {(~pop).sum()} residues / atoms')
+    # ic(atom_mask.shape, indep.seq.shape, pop.shape)
+    # ic(f'Removing {(~pop).sum()} residues / atoms')
     N     = pop.sum()
     pop2d = pop[None,:] * pop[:,None]
 
@@ -1261,7 +1254,7 @@ def diffuse(conf, diffuser, indep, is_diffused, t):
         'is_sm': indep.is_sm
     }
     diffused_fullatoms, aa_masks, true_crds = diffuser.diffuse_pose(**kwargs)
-    ic(diffused_fullatoms.shape, indep.xyz.shape)
+    #ic(diffused_fullatoms.shape, indep.xyz.shape)
 
     ############################################
     ########### New Self Conditioning ##########
@@ -1445,10 +1438,10 @@ class AtomizeResidues:
             natoms = seq_atomize.shape[0]
             if self.indep.is_sm.any():
                 is_atom_motif = self.choose_sm_contact_motif(xyz_atomize)
-                ic(is_atom_motif)
+                #ic(is_atom_motif)
             else:
                 is_atom_motif = self.choose_contiguous_atom_motif(bond_feats_atomize)
-                ic(is_atom_motif)
+                #ic(is_atom_motif)
             # update the chirals to be after all the other residues
             chirals_atomize[:, :-1] += L
 
@@ -1526,7 +1519,7 @@ class AtomizeResidues:
         self.indep.idx = torch.cat((self.indep.idx, idx_atomize))
         
         # handle sm specific features- atom_frames, chirals
-        ic(self.indep.atom_frames.shape)
+        #ic(self.indep.atom_frames.shape)
         self.indep.atom_frames = torch.cat(frames_atomize_all)
         self.indep.chirals = torch.cat(chirals_atomize_all)
         self.indep.terminus_type = torch.cat((self.indep.terminus_type, torch.zeros(atomize_L)))
