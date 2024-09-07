@@ -21,7 +21,6 @@ aa_se3_path = os.path.join(script_dir, 'RF2-allatom/rf2aa/SE3Transformer')
 sys.path.insert(0, aa_se3_path)
 sys.path.append(os.path.join(script_dir, 'RF2-allatom'))
 
-import pdb
 from kinematics import th_kabsch
 import re
 import os, time, pickle
@@ -45,7 +44,6 @@ from rf2aa.RoseTTAFoldModel import reset_model_attrs
 import aa_model
 import util
 import json 
-import pdb as ipdb
 
 
 def make_deterministic(seed=0):
@@ -340,7 +338,6 @@ def sample_one(sampler, simple_logging=False):
                     print('Breaking loop because doing refinement')
                     # have sequence of the native motif as the final sequence in the pdb, all else ala 
                     seq_out = torch.zeros_like(seq_t).long() # (L,80)
-                    #ipdb.set_trace()
                     con_ref = indep.metadata['refinement']['con_ref_idx0']
                     con_hal = indep.metadata['refinement']['con_hal_idx0']
 
@@ -443,7 +440,6 @@ def sample_one(sampler, simple_logging=False):
                         xyz_sm_compat[:,1,:] = xyz_sm[0]
 
                         msa_sm = indep.metadata['refinement']['msa_sm'].squeeze()
-                        # pdb.set_trace()
                         denoised_xyz_stack[-1]  =  torch.cat((denoised_xyz_stack[-1], xyz_sm_compat), dim=0)
                         hot_seq_sm = torch.nn.functional.one_hot(msa_sm, num_classes=80)
                         seq_out = torch.cat((seq_out, hot_seq_sm), dim=0)
@@ -453,7 +449,6 @@ def sample_one(sampler, simple_logging=False):
                         Ltot = len(seq_out.squeeze())
                         Lprot = Ltot - L_sm
                         bond_feats = torch.zeros((Ltot, Ltot))
-                        # pdb.set_trace()
                         bond_feats[:Lprot,:Lprot] = rf2aa.util.get_protein_bond_feats(Lprot)
                         bond_sm = indep.metadata['refinement']['bond_feats_sm']
                         bond_feats[Lprot:,Lprot:] = bond_sm
@@ -566,7 +561,6 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
 
     # compute chain/idx 
     # diffused pdbs
-    ipdb.set_trace()
     aa_model.write_traj(out, 
                         denoised_xyz_stack[0:1], 
                         final_seq, 
@@ -594,7 +588,6 @@ def save_outputs(sampler, out_prefix, indep, denoised_xyz_stack, px0_xyz_stack, 
             rf2aa.util.writepdb_file(f, xyz_particle.cpu(), seq_particle.long(), chain_Ls=chain_Ls_symm)
 
     # trajectory pdbs
-    ipdb.set_trace()
     if not sampler.inf_conf.refine and sampler.inf_conf.traj: #and traj
         traj_prefix = os.path.dirname(out_prefix)+'/traj/'+os.path.basename(out_prefix)
         os.makedirs(os.path.dirname(traj_prefix), exist_ok=True)
