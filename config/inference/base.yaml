@@ -70,7 +70,7 @@ inference:
   helical_breaks: False
   contig_rmsd: 1000 #LA added, set super high if you do not want to use it, set based on how long your contig is
   check_rmsd_step: 10 # at sampler._conf.diffuser.T-check_rmsd_step, check contig rmsd, aka you will diffuse check_rmsd_step steps
-  traj: False # set true if you want to save trajectory
+  traj: True # set true if you want to save trajectory
 contigmap:
   contigs: ['20', 'A3-23', '30']
   inpaint_str: null
