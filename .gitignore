@@ -8,3 +8,4 @@ __pycache__/
 .pytest_cache
 xyz_from_apply_gaussian_noise.pdb
 tmp/
+*.sif
