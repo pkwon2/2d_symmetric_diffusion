@@ -140,33 +140,92 @@ class PotentialManager:
 
         return setting_dict
 
+    # def initialize_all_potentials(self, setting_list):
+    #     '''
+    #         Given a list of potential dictionaries where each dictionary defines the configurations for a single potential,
+    #         initialize all potentials and add to the list of potentials to be applies
+    #     '''
+
+    #     to_apply = []
+
+    #     for potential_dict in setting_list:
+    #         assert(potential_dict['type'] in potentials.implemented_potentials), f'potential with name: {potential_dict["type"]} is not one of the implemented potentials: {potentials.implemented_potentials.keys()}'
+
+    #         kwargs = {k: potential_dict[k] for k in potential_dict.keys() - {'type'}}
+
+    #         # symmetric oligomer contact potential args
+    #         if self.inference_config.symmetry:
+
+    #             num_chains = calc_nchains(symbol=self.inference_config.symmetry, components=1) # hard code 1 for now 
+    #             print('WARNING: Hard coded in potentials, number of components = 1 per ASU. Multi-component ASU potentials may not work yet.')
+    #             contact_kwargs={'nchain':num_chains,
+    #                             'intra_all':self.potentials_config.olig_intra_all,
+    #                             'inter_all':self.potentials_config.olig_inter_all,
+    #                             'contact_string':self.potentials_config.olig_custom_contact }
+    #             contact_matrix = make_contact_matrix(**contact_kwargs)
+    #             kwargs.update({'contact_matrix':contact_matrix})
+
+
+    #         to_apply.append( potentials.implemented_potentials[potential_dict['type']](**kwargs) )
+
+    #     return to_apply
+
     def initialize_all_potentials(self, setting_list):
-        '''
-            Given a list of potential dictionaries where each dictionary defines the configurations for a single potential,
-            initialize all potentials and add to the list of potentials to be applies
-        '''
+        """
+        Initialize the requested guiding potentials.
+
+        Supports both standard inference.symmetry and custom
+        pseudo-cycle configurations using inference.n_repeats.
+        """
 
         to_apply = []
 
         for potential_dict in setting_list:
-            assert(potential_dict['type'] in potentials.implemented_potentials), f'potential with name: {potential_dict["type"]} is not one of the implemented potentials: {potentials.implemented_potentials.keys()}'
+            potential_type = potential_dict["type"]
 
-            kwargs = {k: potential_dict[k] for k in potential_dict.keys() - {'type'}}
+            assert potential_type in potentials.implemented_potentials, (
+                f"Potential {potential_type} is not implemented."
+            )
 
-            # symmetric oligomer contact potential args
-            if self.inference_config.symmetry:
+            kwargs = {
+                k: v for k, v in potential_dict.items()
+                if k != "type"
+            }
 
-                num_chains = calc_nchains(symbol=self.inference_config.symmetry, components=1) # hard code 1 for now 
-                print('WARNING: Hard coded in potentials, number of components = 1 per ASU. Multi-component ASU potentials may not work yet.')
-                contact_kwargs={'nchain':num_chains,
-                                'intra_all':self.potentials_config.olig_intra_all,
-                                'inter_all':self.potentials_config.olig_inter_all,
-                                'contact_string':self.potentials_config.olig_custom_contact }
+            # Generate contact matrices only for olig_contacts
+            if potential_type == "olig_contacts":
+
+                if self.inference_config.symmetry:
+                    # Standard RFdiffusion symmetry
+                    num_chains = calc_nchains(
+                        symbol=self.inference_config.symmetry,
+                        components=1
+                    )
+
+                elif self.inference_config.n_repeats:
+                    # Custom pseudo-cycle / repeat symmetry
+                    num_chains = self.inference_config.n_repeats
+
+                else:
+                    raise ValueError(
+                        "olig_contacts requires either inference.symmetry "
+                        "or inference.n_repeats."
+                    )
+
+                contact_kwargs = {
+                    "nchain": num_chains,
+                    "intra_all": self.potentials_config.olig_intra_all,
+                    "inter_all": self.potentials_config.olig_inter_all,
+                    "contact_string": self.potentials_config.olig_custom_contact,
+                }
+
                 contact_matrix = make_contact_matrix(**contact_kwargs)
-                kwargs.update({'contact_matrix':contact_matrix})
 
+                kwargs["contact_matrix"] = contact_matrix
 
-            to_apply.append( potentials.implemented_potentials[potential_dict['type']](**kwargs) )
+            to_apply.append(
+                potentials.implemented_potentials[potential_type](**kwargs)
+            )
 
         return to_apply
 
