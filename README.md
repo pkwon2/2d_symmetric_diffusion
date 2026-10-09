@@ -244,33 +244,33 @@ mkdir -p "$DESIGN_DIR/c2"
 Run inference:
 
 ```bash
-apptainer run --nv "$APPTAINER_PATH" \\
-    "$RFDIFFUSION_DIR/run_inference.py" \\
-    --config-name=aa \\
-    inference.ckpt_path="$RFDIFFUSION_CKPT_PATH" \\
-    inference.model_runner=NRBStyleSelfCond \\
-    inference.num_designs=1 \\
-    inference.output_prefix="$DESIGN_DIR/c2/design" \\
-    contigmap.contigs="['C1-199,20-20,C221-255,26-26 D1-53 B1-199,20-20,B221-255,26-26 F1-53']" \\
-    inference.two_template=True \\
-    inference.three_template=True \\
-    inference.rigid_repeat_motif=False \\
-    diffuser.T=50 \\
-    model.symmetrize_repeats=True \\
-    model.symmsub_k=1 \\
-    model.main_block=0 \\
-    model.sym_method=max \\
-    denoiser.noise_scale_frame=0.05 \\
-    denoiser.noise_scale_ca=0.05 \\
-    inference.ij_visible=abcdef \\
-    inference.motif_only_2d=True \\
-    preprocess.eye_frames=True \\
-    inference.supply_motif_seq=True \\
-    inference.cyclic_protein_indices=False \\
-    inference.input_pdb="$INPUT_DIR/array_rechain.pdb" \\
-    inference.n_repeats=2 \\
-    model.repeat_length=333 \\
-    model.pseudo_cycle=False \\
+apptainer run --nv "$APPTAINER_PATH" \
+    "$RFDIFFUSION_DIR/run_inference.py" \
+    --config-name=aa \
+    inference.ckpt_path="$RFDIFFUSION_CKPT_PATH" \
+    inference.model_runner=NRBStyleSelfCond \
+    inference.num_designs=1 \
+    inference.output_prefix="$DESIGN_DIR/c2/design" \
+    contigmap.contigs="['C1-199,20-20,C221-255,26-26 D1-53 B1-199,20-20,B221-255,26-26 F1-53']" \
+    inference.two_template=True \
+    inference.three_template=True \
+    inference.rigid_repeat_motif=False \
+    diffuser.T=50 \
+    model.symmetrize_repeats=True \
+    model.symmsub_k=1 \
+    model.main_block=0 \
+    model.sym_method=max \
+    denoiser.noise_scale_frame=0.05 \
+    denoiser.noise_scale_ca=0.05 \
+    inference.ij_visible=abcdef \
+    inference.motif_only_2d=True \
+    preprocess.eye_frames=True \
+    inference.supply_motif_seq=True \
+    inference.cyclic_protein_indices=False \
+    inference.input_pdb="$INPUT_DIR/array_rechain.pdb" \
+    inference.n_repeats=2 \
+    model.repeat_length=333 \
+    model.pseudo_cycle=False \
     inference.align_px0_motif=False
 ```
 
@@ -304,32 +304,32 @@ mkdir -p "$DESIGN_DIR/c3-c2"
 Run inference:
 
 ```bash
-apptainer run --nv "$APPTAINER_PATH" \\
-    "$RFDIFFUSION_DIR/run_inference.py" \\
-    --config-name=aa \\
-    inference.ckpt_path="$RFDIFFUSION_CKPT_PATH" \\
-    inference.model_runner=NRBStyleSelfCond \\
-    inference.num_designs=3 \\
-    inference.output_prefix="$DESIGN_DIR/c3-c2/design" \\
-    contigmap.contigs="['40-40 40-40 40-40 40-40 40-40 40-40']" \\
-    inference.two_template=True \\
-    inference.three_template=True \\
-    inference.rigid_repeat_motif=False \\
-    diffuser.T=50 \\
-    model.symmetrize_repeats=True \\
-    model.symmsub_k=1 \\
-    model.main_block=0 \\
-    model.sym_method=max \\
-    denoiser.noise_scale_frame=0.05 \\
-    denoiser.noise_scale_ca=0.05 \\
-    inference.motif_only_2d=True \\
-    preprocess.eye_frames=True \\
-    inference.supply_motif_seq=True \\
-    inference.cyclic_protein_indices=True \\
-    inference.input_pdb="$INPUT_DIR/D3.pdb" \\
-    inference.n_repeats=6 \\
-    model.repeat_length=40 \\
-    model.pseudo_cycle=c3-c2 \\
+apptainer run --nv "$APPTAINER_PATH" \
+    "$RFDIFFUSION_DIR/run_inference.py" \
+    --config-name=aa \
+    inference.ckpt_path="$RFDIFFUSION_CKPT_PATH" \
+    inference.model_runner=NRBStyleSelfCond \
+    inference.num_designs=3 \
+    inference.output_prefix="$DESIGN_DIR/c3-c2/design" \
+    contigmap.contigs="['40-40 40-40 40-40 40-40 40-40 40-40']" \
+    inference.two_template=True \
+    inference.three_template=True \
+    inference.rigid_repeat_motif=False \
+    diffuser.T=50 \
+    model.symmetrize_repeats=True \
+    model.symmsub_k=1 \
+    model.main_block=0 \
+    model.sym_method=max \
+    denoiser.noise_scale_frame=0.05 \
+    denoiser.noise_scale_ca=0.05 \
+    inference.motif_only_2d=True \
+    preprocess.eye_frames=True \
+    inference.supply_motif_seq=True \
+    inference.cyclic_protein_indices=True \
+    inference.input_pdb="$INPUT_DIR/D3.pdb" \
+    inference.n_repeats=6 \
+    model.repeat_length=40 \
+    model.pseudo_cycle=c3-c2 \
     inference.align_px0_motif=False
 ```
 
@@ -360,32 +360,32 @@ mkdir -p "$DESIGN_DIR/d3"
 Run inference:
 
 ```bash
-apptainer run --nv "$APPTAINER_PATH" \\
-    "$RFDIFFUSION_DIR/run_inference.py" \\
-    --config-name=aa \\
-    inference.ckpt_path="$RFDIFFUSION_CKPT_PATH" \\
-    inference.model_runner=NRBStyleSelfCond \\
-    inference.num_designs=3 \\
-    inference.output_prefix="$DESIGN_DIR/d3/design" \\
-    contigmap.contigs="['40-40 40-40 40-40 40-40 40-40 40-40']" \\
-    inference.two_template=True \\
-    inference.three_template=True \\
-    inference.rigid_repeat_motif=False \\
-    diffuser.T=50 \\
-    model.symmetrize_repeats=True \\
-    model.symmsub_k=1 \\
-    model.main_block=0 \\
-    model.sym_method=max \\
-    denoiser.noise_scale_frame=0.05 \\
-    denoiser.noise_scale_ca=0.05 \\
-    inference.motif_only_2d=True \\
-    preprocess.eye_frames=True \\
-    inference.supply_motif_seq=True \\
-    inference.cyclic_protein_indices=True \\
-    inference.input_pdb="$INPUT_DIR/D3.pdb" \\
-    inference.n_repeats=6 \\
-    model.repeat_length=40 \\
-    model.pseudo_cycle=d3 \\
+apptainer run --nv "$APPTAINER_PATH" \
+    "$RFDIFFUSION_DIR/run_inference.py" \
+    --config-name=aa \
+    inference.ckpt_path="$RFDIFFUSION_CKPT_PATH" \
+    inference.model_runner=NRBStyleSelfCond \
+    inference.num_designs=3 \
+    inference.output_prefix="$DESIGN_DIR/d3/design" \
+    contigmap.contigs="['40-40 40-40 40-40 40-40 40-40 40-40']" \
+    inference.two_template=True \
+    inference.three_template=True \
+    inference.rigid_repeat_motif=False \
+    diffuser.T=50 \
+    model.symmetrize_repeats=True \
+    model.symmsub_k=1 \
+    model.main_block=0 \
+    model.sym_method=max \
+    denoiser.noise_scale_frame=0.05 \
+    denoiser.noise_scale_ca=0.05 \
+    inference.motif_only_2d=True \
+    preprocess.eye_frames=True \
+    inference.supply_motif_seq=True \
+    inference.cyclic_protein_indices=True \
+    inference.input_pdb="$INPUT_DIR/D3.pdb" \
+    inference.n_repeats=6 \
+    model.repeat_length=40 \
+    model.pseudo_cycle=d3 \
     inference.align_px0_motif=False
 ```
 
