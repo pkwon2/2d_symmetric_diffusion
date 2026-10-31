@@ -1379,7 +1379,8 @@ class NRBStyleSelfCond(Sampler):
             # the entire protein is diffused
             # trying to reconstruct motif from 2d only 
 
-            if not self._conf.model.symmetrize_repeats:
+            # if not self._conf.model.symmetrize_repeats:
+            if refine or not self._conf.model.symmetrize_repeats:
                 # asymmetric case 
                 is_protein_motif = ~indep.is_sm * ~self.is_diffused_orig
                 if refine: 
