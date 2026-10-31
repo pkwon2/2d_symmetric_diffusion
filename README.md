@@ -97,8 +97,10 @@ Run these commands from the root of the repository:
 export RFDIFFUSION_DIR="$(pwd)"
 # Model weights
 export WEIGHTS_DIR="$RFDIFFUSION_DIR/weights"
-# Pretrained checkpoint included in the repository
+# Checkpoint for design generation
 export RFDIFFUSION_CKPT_PATH="$WEIGHTS_DIR/BFF_0.20.pt"
+# Checkpoint for refinement
+export RFDIFFUSION_REFINE_CKPT_PATH="$WEIGHTS_DIR/BFF_3.pt"
 # Apptainer environment directory
 export ENV_DIR="$RFDIFFUSION_DIR/exec"
 # Apptainer image used by all inference examples
@@ -113,28 +115,37 @@ mkdir -p "$ENV_DIR" "$DESIGN_DIR" "$INPUT_DIR"
 
 ### 3. Model weights
 
-The model checkpoint is located at:
+The design and refinement commands use separate checkpoints:
+
+| Purpose | Environment variable | Checkpoint |
+|---|---|---|
+| Design generation | `RFDIFFUSION_CKPT_PATH` | `weights/BFF_0.20.pt` |
+| Refinement | `RFDIFFUSION_REFINE_CKPT_PATH` | `weights/BFF_3.pt` |
+
+Place the checkpoint files in the repository's `weights/` directory:
 
 ```text
 2d_symmetric_diffusion/
 └── weights/
-    └── BFF_0.20.pt
+    ├── BFF_0.20.pt
+    └── BFF_3.pt
 ```
 
-The checkpoint path is automatically configured by the environment
-variables defined in Step 2:
+The checkpoint paths are configured by the environment variables in Step 2:
 
 ```bash
-export RFDIFFUSION_CKPT_PATH="$RFDIFFUSION_DIR/weights/BFF_0.20.pt"
+export RFDIFFUSION_CKPT_PATH="$WEIGHTS_DIR/BFF_0.20.pt"
+export RFDIFFUSION_REFINE_CKPT_PATH="$WEIGHTS_DIR/BFF_3.pt"
 ```
 
-No additional checkpoint download is required if the full checkpoint
-is included in the cloned repository.
+If a checkpoint is not included in the cloned repository or available
+through Git LFS, copy it into the `weights/` directory before running
+the corresponding command.
 
-Verify that the checkpoint is present:
+Verify that both checkpoints are present:
 
 ```bash
-ls -lh "$RFDIFFUSION_CKPT_PATH"
+ls -lh "$RFDIFFUSION_CKPT_PATH" "$RFDIFFUSION_REFINE_CKPT_PATH"
 ```
 
 ### 4. Download the Apptainer environment
@@ -179,7 +190,7 @@ Downloading the `.sif` file may take several minutes.
 
 **Note:** The downloaded container provides the software environment.
 
-The modified RFdiffusion implementation and pretrained checkpoint are
+The modified RFdiffusion implementation and pretrained checkpoints are
 provided separately through this repository.
 
 The examples below use NVIDIA GPUs through Apptainer's `--nv` option.
@@ -400,10 +411,11 @@ apptainer run --nv "$APPTAINER_PATH" \
 
 ### 4. Motif Scaffolding with D3 Symmetry
 
-This example uses six input PDB motif segments (chains A–F, residues 1–158) and appends 37 designed residues to each segment. It enables 2D motif conditioning and cyclic protein indices under the D3 symmetry configuration.
+This example uses six input PDB motif segments (chains A–F, residues 18–158), with 17 designed residues before and 37 designed residues after each motif. Each repeat contains 195 residues (17 + 141 + 37). It enables 2D motif conditioning and cyclic protein indices under the D3 symmetry configuration.
 
 ```bash
 mkdir -p "$DESIGN_DIR/d3_motif_scaffolding"
+
 apptainer run --nv "$APPTAINER_PATH" \
     "$RFDIFFUSION_DIR/run_inference.py" \
     --config-name=aa \
@@ -411,7 +423,7 @@ apptainer run --nv "$APPTAINER_PATH" \
     inference.model_runner=NRBStyleSelfCond \
     inference.num_designs=3 \
     inference.output_prefix="$DESIGN_DIR/d3_motif_scaffolding/design" \
-    contigmap.contigs="['17-17,A18-158,37-37 17-17,B18-158,37-37 17-17,C18-158,37-37 17-17,D18-158,37-37 17-17,E18-158,37-37 17-17,F18-158,37-37']" \
+    "contigmap.contigs=['17-17,A18-158,37-37 17-17,B18-158,37-37 17-17,C18-158,37-37 17-17,D18-158,37-37 17-17,E18-158,37-37 17-17,F18-158,37-37']" \
     inference.two_template=True \
     inference.three_template=True \
     inference.rigid_repeat_motif=False \
@@ -431,21 +443,135 @@ apptainer run --nv "$APPTAINER_PATH" \
     inference.n_repeats=6 \
     model.repeat_length=195 \
     model.pseudo_cycle=d3 \
-    potentials.guiding_potentials=[\"type:olig_contacts,weight_intra:1,weight_inter:0.06\"] \
-    potentials.olig_intra_all=True potentials.olig_inter_all=True potentials.guide_scale=2 \
-    potentials.guide_decay="cubic" \
+    'potentials.guiding_potentials=["type:olig_contacts,weight_intra:1,weight_inter:0.06"]' \
+    potentials.olig_intra_all=True \
+    potentials.olig_inter_all=True \
+    potentials.guide_scale=2 \
+    potentials.guide_decay=cubic \
     inference.align_px0_motif=False
 ```
 
 Key distinctions from the preceding D3 example are the explicit fixed motif ranges in `contigmap.contigs`, `model.repeat_length=195` and the `inference.ij_visible=abcdef` settings. The input `inputs/D3.pdb` must include the referenced chain IDs and residue numbers.
 
+### 5. Frame Refinement with D3 Repeat Symmetry
+
+The generation command in Example 4 produces the Cα scaffold. Refine that
+scaffold with `BFF_3.pt` to predict the backbone frames, using the separate
+`RFDIFFUSION_REFINE_CKPT_PATH` checkpoint variable.
+
+#### Refinement mask support
+
+The refinement command below requires the updated mask condition in
+`NRBStyleSelfCond._get_3template_masks()` in `inference/model_runners.py`.
+Within the `if self._conf.inference.motif_only_2d:` block, the condition is:
+
+```python
+if refine or not self._conf.model.symmetrize_repeats:
+```
+
+This routes refinement through the existing full-structure motif-mask
+logic, which restores motif indices and pair visibility from the saved
+metadata. It allows `model.symmetrize_repeats=True` during refinement.
+Generation with repeat symmetrization still uses the repeat-specific
+mask branch. Older code with only
+`if not self._conf.model.symmetrize_repeats:` raises
+`AssertionError: refine not yet implemented for symmetry/repeat` for
+this command.
+
+#### Select a generated input
+
+Select one of the PDB files generated by Example 4:
+
+```bash
+export REFINE_INPUT_PDB="$DESIGN_DIR/d3_motif_scaffolding/design_0.pdb"
+```
+
+To refine a different design, replace `design_0.pdb` with its filename,
+such as `design_6.pdb` if it exists from a previous generation run.
+Keep the matching `.trb` file beside the selected input PDB, and retain
+access to the original motif PDB recorded in that file.
+Refinement uses these files to restore the original motif conditioning.
+The explicit `inference.ij_visible` setting below is superseded by the
+saved refinement metadata. Refinement constructs contigs from the
+generated structure, so the original generation contigs are not repeated
+in this command.
+
+#### Run refinement
+
+This configuration has been successfully run with the updated model runner:
+
+```bash
+apptainer run --nv "$APPTAINER_PATH" \
+    "$RFDIFFUSION_DIR/run_inference.py" \
+    --config-name=aa \
+    inference.ckpt_path="$RFDIFFUSION_REFINE_CKPT_PATH" \
+    inference.model_runner=NRBStyleSelfCond \
+    inference.num_designs=3 \
+    inference.two_template=True \
+    inference.three_template=True \
+    inference.rigid_repeat_motif=False \
+    diffuser.T=50 \
+    diffuser.so3_type=random \
+    diffuser.eucl_type=gaussian \
+    inference.refine=True \
+    inference.refine_recycles=4 \
+    model.symmetrize_repeats=True \
+    model.symmsub_k=1 \
+    model.main_block=0 \
+    model.sym_method=max \
+    inference.motif_only_2d=True \
+    inference.supply_motif_seq=True \
+    inference.cyclic_protein_indices=True \
+    inference.input_pdb="$REFINE_INPUT_PDB" \
+    inference.ij_visible=abcdef \
+    inference.n_repeats=6 \
+    model.repeat_length=195 \
+    model.pseudo_cycle=d3 \
+    inference.align_px0_motif=False
+```
+
+**Key refinement parameters:**
+
+| Parameter | Description |
+|---|---|
+| `inference.ckpt_path="$RFDIFFUSION_REFINE_CKPT_PATH"` | Selects the `BFF_3.pt` refinement checkpoint. |
+| `inference.refine=True` | Enables refinement of the generated input structure. |
+| `inference.refine_recycles=4` | Uses four model recycles for refinement. |
+| `model.symmetrize_repeats=True` | Ties repeat pair features inside the model. |
+| `model.pseudo_cycle=d3` | Selects the D3 repeat-pair symmetry pattern. |
+| `inference.n_repeats=6` | Specifies six repeats. |
+| `model.repeat_length=195` | Specifies 195 residues per repeat. |
+| `inference.cyclic_protein_indices=True` | Uses cyclic protein-index features, matching generation. |
+
+Leave `inference.pseudo_symmetry` out of this command. The model's
+`model.pseudo_cycle=d3` setting controls the repeat-pair pattern.
+`inference.pseudo_symmetry=d3` is a separate operation that replaces
+coordinates with rotations about fixed global axes, which can disrupt
+a scaffold generated in a different orientation or repeat order.
+Do not explicitly pass `inference.pseudo_symmetry=null`: the checkpoint
+override parser attempts to cast it through `NoneType` and raises
+`TypeError: NoneType takes no arguments`. Omitting the argument retains
+its default `null` value.
+
+The refinement command uses the checkpoint's frame preprocessing defaults;
+it does not set `preprocess.eye_frames=True` or
+`inference.start_from_input=True`. The refinement path bypasses the
+denoiser update, so generation-stage denoiser noise-scale settings are
+not included here. Repeat-feature tying does not mathematically guarantee
+exact all-atom coordinate symmetry; inspect the refined structures.
+
+Refinement derives its output prefix from the selected input PDB path by
+replacing `.pdb` with `_refined`. For `design_6.pdb`, the three outputs are
+`design_6_refined_0.pdb`, `design_6_refined_1.pdb`, and
+`design_6_refined_2.pdb`, saved beside the input PDB.
+
 ## Additional Parameters
 
-The following parameters are shared across the inference examples.
+The following parameters are used across the inference examples.
 | Parameter | Description |
 |---|---|
 | `--config-name=aa` | Uses the All-Atom RFdiffusion configuration. |
-| `inference.ckpt_path` | Path to the pretrained model checkpoint. |
+| `inference.ckpt_path` | Path to the design or refinement checkpoint for the current stage. |
 | `inference.model_runner=NRBStyleSelfCond` | Uses the self-conditioning inference runner. |
 | `diffuser.T=50` | Sets the diffusion process to 50 steps. |
 | `inference.two_template=True` | Enables two-template functionality. |
@@ -473,11 +599,13 @@ For example:
 outputs/
 ├── c2/
 ├── c3-c2/
-└── d3/
+├── d3/
+└── d3_motif_scaffolding/
 ```
 
 Each directory contains the inference outputs for its corresponding
-symmetry specification.
+symmetry specification. Refinement outputs are saved alongside the
+selected input design using a prefix ending in `_refined`.
 
 ## Notes
 
@@ -489,16 +617,14 @@ environment.
 The inference commands use Apptainer with the `--nv` flag to expose
 NVIDIA GPUs to the container.
 
-### Model Checkpoint
+### Model Checkpoints
 
-The provided examples use:
+Design generation uses `weights/BFF_0.20.pt` through
+`RFDIFFUSION_CKPT_PATH`. Refinement uses `weights/BFF_3.pt` through
+`RFDIFFUSION_REFINE_CKPT_PATH`.
 
-```text
-weights/BFF_0.20.pt
-```
-
-The checkpoint path is automatically defined relative to the
-repository directory.
+Both checkpoint paths are defined relative to the repository directory
+by the setup commands.
 
 ### Input Structures
 
