@@ -239,6 +239,17 @@ Before running the examples, ensure that the repository paths,
 model checkpoint, Apptainer environment, and input PDB structures
 have been configured as described above.
 
+Refinement commands are provided after the generation examples for C2,
+C3-C2, and D3. They use the `BFF_3.pt` checkpoint configured by
+`RFDIFFUSION_REFINE_CKPT_PATH` and require the updated
+[refinement mask support](#refinement-mask-support) described in Example 5.
+Keep the matching `.trb` file beside each selected input PDB and retain
+access to the original motif PDB recorded in it. Each command refines
+`design_0.pdb`; change the filename to select another generated design.
+The three refined structures are saved beside the input as
+`design_0_refined_0.pdb`, `design_0_refined_1.pdb`, and
+`design_0_refined_2.pdb`.
+
 ### 1. Cyclic Symmetry (C2)
 
 This example generates a protein assembly with C2 cyclic symmetry
@@ -295,6 +306,42 @@ apptainer run --nv "$APPTAINER_PATH" \
 | `inference.ij_visible=abcdef` | Specifies visible motif information. |
 | `model.pseudo_cycle=False` | Disables pseudo-cycle symmetry mode. |
 | `inference.input_pdb` | Specifies the input motif structure. |
+
+#### Refine the generated C2 design
+
+After generation completes, refine `c2/design_0.pdb` using
+2 repeats of 333 residues.
+
+```bash
+export REFINE_INPUT_PDB="$DESIGN_DIR/c2/design_0.pdb"
+
+apptainer run --nv "$APPTAINER_PATH" \
+    "$RFDIFFUSION_DIR/run_inference.py" \
+    --config-name=aa \
+    inference.ckpt_path="$RFDIFFUSION_REFINE_CKPT_PATH" \
+    inference.model_runner=NRBStyleSelfCond \
+    inference.num_designs=3 \
+    inference.two_template=True \
+    inference.three_template=True \
+    inference.rigid_repeat_motif=False \
+    diffuser.T=50 \
+    diffuser.so3_type=random \
+    diffuser.eucl_type=gaussian \
+    inference.refine=True \
+    inference.refine_recycles=4 \
+    model.symmetrize_repeats=True \
+    model.symmsub_k=1 \
+    model.main_block=0 \
+    model.sym_method=max \
+    inference.motif_only_2d=True \
+    inference.supply_motif_seq=True \
+    inference.cyclic_protein_indices=True \
+    inference.input_pdb="$REFINE_INPUT_PDB" \
+    inference.ij_visible=abcdef \
+    inference.n_repeats=2 \
+    model.repeat_length=333 \
+    inference.align_px0_motif=False
+```
 
 ### 2. Combined C3-C2 Symmetry
 
@@ -353,6 +400,42 @@ apptainer run --nv "$APPTAINER_PATH" \
 | `model.symmetrize_repeats=True` | Enables repeat symmetrization. |
 | `inference.num_designs=3` | Generates three designs. |
 
+#### Refine the generated C3-C2 design
+
+After generation completes, refine `c3-c2/design_0.pdb` using
+6 repeats of 40 residues.
+
+```bash
+export REFINE_INPUT_PDB="$DESIGN_DIR/c3-c2/design_0.pdb"
+
+apptainer run --nv "$APPTAINER_PATH" \
+    "$RFDIFFUSION_DIR/run_inference.py" \
+    --config-name=aa \
+    inference.ckpt_path="$RFDIFFUSION_REFINE_CKPT_PATH" \
+    inference.model_runner=NRBStyleSelfCond \
+    inference.num_designs=3 \
+    inference.two_template=True \
+    inference.three_template=True \
+    inference.rigid_repeat_motif=False \
+    diffuser.T=50 \
+    diffuser.so3_type=random \
+    diffuser.eucl_type=gaussian \
+    inference.refine=True \
+    inference.refine_recycles=4 \
+    model.symmetrize_repeats=True \
+    model.symmsub_k=1 \
+    model.main_block=0 \
+    model.sym_method=max \
+    inference.motif_only_2d=True \
+    inference.supply_motif_seq=True \
+    inference.cyclic_protein_indices=True \
+    inference.input_pdb="$REFINE_INPUT_PDB" \
+    model.pseudo_cycle=c3-c2 \
+    inference.n_repeats=6 \
+    model.repeat_length=40 \
+    inference.align_px0_motif=False
+```
+
 ### 3. Dihedral Symmetry (D3)
 
 This example generates a protein assembly with D3 dihedral symmetry.
@@ -408,6 +491,42 @@ apptainer run --nv "$APPTAINER_PATH" \
 | `model.pseudo_cycle=d3` | Enables the D3 symmetry mode. |
 | `model.symmetrize_repeats=True` | Enables repeat symmetrization in this example. |
 | `inference.num_designs=3` | Generates three designs. |
+
+#### Refine the generated D3 design
+
+After generation completes, refine `d3/design_0.pdb` using
+6 repeats of 40 residues.
+
+```bash
+export REFINE_INPUT_PDB="$DESIGN_DIR/d3/design_0.pdb"
+
+apptainer run --nv "$APPTAINER_PATH" \
+    "$RFDIFFUSION_DIR/run_inference.py" \
+    --config-name=aa \
+    inference.ckpt_path="$RFDIFFUSION_REFINE_CKPT_PATH" \
+    inference.model_runner=NRBStyleSelfCond \
+    inference.num_designs=3 \
+    inference.two_template=True \
+    inference.three_template=True \
+    inference.rigid_repeat_motif=False \
+    diffuser.T=50 \
+    diffuser.so3_type=random \
+    diffuser.eucl_type=gaussian \
+    inference.refine=True \
+    inference.refine_recycles=4 \
+    model.symmetrize_repeats=True \
+    model.symmsub_k=1 \
+    model.main_block=0 \
+    model.sym_method=max \
+    inference.motif_only_2d=True \
+    inference.supply_motif_seq=True \
+    inference.cyclic_protein_indices=True \
+    inference.input_pdb="$REFINE_INPUT_PDB" \
+    model.pseudo_cycle=d3 \
+    inference.n_repeats=6 \
+    model.repeat_length=40 \
+    inference.align_px0_motif=False
+```
 
 ### 4. Motif Scaffolding with D3 Symmetry
 
