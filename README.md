@@ -411,7 +411,7 @@ apptainer run --nv "$APPTAINER_PATH" \
     inference.model_runner=NRBStyleSelfCond \
     inference.num_designs=3 \
     inference.output_prefix="$DESIGN_DIR/d3_motif_scaffolding/design" \
-    contigmap.contigs="['A1-158,37-37 B1-158,37-37 C1-158,37-37 D1-158,37-37 E1-158,37-37 F1-158,37-37']" \
+    contigmap.contigs="['17-17,A18-158,37-37 17-17,B18-158,37-37 17-17,C18-158,37-37 17-17,D18-158,37-37 17-17,E18-158,37-37 17-17,F18-158,37-37']" \
     inference.two_template=True \
     inference.three_template=True \
     inference.rigid_repeat_motif=False \
