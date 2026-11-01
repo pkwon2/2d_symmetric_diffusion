@@ -772,14 +772,3 @@ Subsequent runs may be faster.
 
 The provided Apptainer image is downloaded from the RFDpoly
 distribution.
-
-### Associated Preprint
-
-Kwon, P. S., et al. (2026).
-
-**Controlling metal-carbonate phase, form, and function through
-de novo protein design.**
-
-**bioRxiv**.
-
-https://doi.org/10.64898/2026.06.10.730916
