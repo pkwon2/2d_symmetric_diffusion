@@ -7,8 +7,6 @@ used in the following preprint:
 
 **Controlling metal-carbonate phase, form, and function through de novo protein design**
 
-**bioRxiv** (2026).
-
 [Read the preprint](https://doi.org/10.64898/2026.06.10.730916)
 
 ### Citation
