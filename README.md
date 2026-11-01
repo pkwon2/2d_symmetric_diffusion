@@ -77,7 +77,7 @@ capable of templating inorganic crystal formation.
 Clone this repository:
 
 ```bash
-git clone https://github.com/pkwon2/2d_symmetric_diffusion.git
+git clone https://github.com/YOUR_USERNAME/2d_symmetric_diffusion.git
 cd 2d_symmetric_diffusion
 ```
 
