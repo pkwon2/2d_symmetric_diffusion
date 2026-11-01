@@ -7,13 +7,6 @@ used in the following preprint:
 
 **Controlling metal-carbonate phase, form, and function through de novo protein design**
 
-Paul S. Kwon, Xinqi Li, Le Tracy Yu, Harley Pyles, Todd H. Lewis,
-Connor Weidle, Andrew J. Borst, Catherine C. Bodinger, Alex Kang,
-Hannah Nguyen, Johnny Mendoza, Kenneth D. Carr, Brian Coventry,
-Yang Hsia, Zsombor Molnar, Dongsheng Li, Bo Zhang,
-Brandi M. Cossairt, Shuai Zhang, Asim K. Bera,
-James De Yoreo, and David Baker.
-
 **bioRxiv** (2026).
 
 [Read the preprint](https://doi.org/10.64898/2026.06.10.730916)
@@ -67,6 +60,17 @@ The implementation supports:
 These methods were developed to explore protein architectures for
 biomineralization, including protein arrays and symmetric assemblies
 capable of templating inorganic crystal formation.
+
+## Protein Assembly Examples
+
+### 2D Protein Array
+![2D Protein Array](assets/gifs/array.gif)
+
+### C3-C2 Symmetric Assembly
+![C3-C2 Assembly](assets/gifs/c3_c2.gif)
+
+### D3 Symmetric Assembly
+![D3 Assembly](assets/gifs/d3.gif)
 
 ## Installation and Setup
 
